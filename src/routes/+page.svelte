@@ -4,6 +4,7 @@
     import { fade, fly } from 'svelte/transition';
     import { onMount } from 'svelte';
     import { sendSMS } from '$lib/smsService';
+    import { jsPDF } from 'jspdf';
     
     let formData = {
         tcId: '',
@@ -18,6 +19,21 @@
         tckn: '',
         phoneNumber: ''
     };
+
+    let examData: {
+        tcId: string;
+        studentFullName: string;
+        birthDate: string;
+        studentSchoolName: string;
+        parentFullName: string;
+        phoneNumber: string;
+        schoolName: string;
+        hallName: string;
+        orderNumber: number;
+    } | null = null;
+
+    let isCustomSchool = false;
+    let customSchoolName = '';
 
     function toTurkishUpperCase(str: string): string {
         return str.replace('i', 'İ')
@@ -38,6 +54,7 @@
     let schools: string[] = [];
     let notificationId = 0;
     let examEntryButton: HTMLAnchorElement;
+    let downloadButton: HTMLButtonElement;
 
     onMount(async () => {
         await loadSchools();
@@ -133,9 +150,26 @@
         }
     }
     
+    function handleSchoolSelect(event: Event) {
+        const select = event.target as HTMLSelectElement;
+        if (select.value === "DİĞER") {
+            isCustomSchool = true;
+            customSchoolName = '';
+        } else {
+            isCustomSchool = false;
+            formData.schoolName = select.value;
+        }
+    }
+
+    function handleCustomSchoolInput(event: Event) {
+        const input = event.target as HTMLInputElement;
+        customSchoolName = toTurkishUpperCase(input.value);
+        formData.schoolName = customSchoolName;
+    }
+    
     async function handleSubmit() {
         // Check submission deadline
-        const deadline = new Date('2025-04-19');
+        const deadline = new Date('2025-04-02');
         const now = new Date();
         
         if (now > deadline) {
@@ -191,6 +225,8 @@
             let capacityIncrease = 0;
             let assignedSchool;
             let assignedHall;
+            let assignedSchoolId;
+            let assignedHallId;
 
             // Get and shuffle all schools
             const shuffledSchools = shuffle([...schools]);
@@ -248,6 +284,8 @@
                         assigned = true;
                         assignedSchool = school.data().name;
                         assignedHall = hallData.name;
+                        assignedSchoolId = school.id;
+                        assignedHallId = hall.id;
                         break;
                     }
                 }
@@ -300,6 +338,8 @@
                             assigned = true;
                             assignedSchool = school.data().name;
                             assignedHall = hallData.name;
+                            assignedSchoolId = school.id;
+                            assignedHallId = hall.id;
                             break;
                         }
                     }
@@ -323,6 +363,38 @@
 
             showNotification('Başvurunuz başarıyla gönderildi ve sınav yeriniz atandı!', 'success');
 
+            // Show exam entry document section
+            if (!assignedSchoolId || !assignedHallId) {
+                throw new Error('School or hall ID not found');
+            }
+            
+            // Get exam data from Firebase document
+            const examDocRef = doc(db, "examApplications", formData.tcId);
+            const examDocSnap = await getDoc(examDocRef);
+            
+            if (examDocSnap.exists()) {
+                examData = examDocSnap.data() as {
+                    tcId: string;
+                    studentFullName: string;
+                    birthDate: string;
+                    studentSchoolName: string;
+                    parentFullName: string;
+                    phoneNumber: string;
+                    schoolName: string;
+                    hallName: string;
+                    orderNumber: number;
+                };
+                
+                // Wait for the next tick to ensure the button is rendered
+                setTimeout(() => {
+                    downloadButton?.focus();
+                    downloadButton?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 0);
+            } else {
+                console.error("Exam data not found in Firebase");
+                showNotification('Sınav bilgileri bulunamadı.', 'error');
+            }
+
             // Reset form
             formData = {
                 tcId: '',
@@ -336,6 +408,131 @@
             console.error("Error submitting application: ", error);
             showNotification('Başvuru gönderilirken bir hata oluştu. Lütfen tekrar deneyiniz.', 'error');
         }
+    }
+
+    function downloadExamDocument() {
+        if (!examData) return;
+
+        // Create new PDF document
+        const doc = new jsPDF();
+        
+        // Add local fonts
+        doc.addFont("/fonts/DejaVuSans.ttf", "DejaVuSans", "normal");
+        doc.addFont("/fonts/DejaVuSans-Bold.ttf", "DejaVuSans", "bold");
+        
+        // Set default font to DejaVuSans
+        doc.setFont("DejaVuSans");
+        
+        // Add header with border
+        doc.setDrawColor(0, 51, 102); // Navy blue color for borders
+        doc.setLineWidth(0.5);
+        doc.rect(10, 10, 190, 277); // Outer border
+        doc.rect(15, 15, 180, 30); // Header border
+        
+        // Add header text
+        doc.setFontSize(22);
+        doc.setFont("DejaVuSans", "bold");
+        doc.setTextColor(0, 51, 102); // Navy blue color for main title
+        doc.text("SINAV GİRİŞ BELGESİ", 105, 32, { align: "center" });
+    
+        // Reset text color to black for content
+        doc.setTextColor(0, 0, 0);
+        
+        // Add student information section
+        doc.setFontSize(16);
+        doc.setFont("DejaVuSans", "bold");
+        doc.setTextColor(0, 51, 102); // Navy blue for section headers
+        doc.text("ÖĞRENCİ BİLGİLERİ", 25, 60);
+        
+        // Add horizontal line under section header
+        doc.setDrawColor(0, 51, 102);
+        doc.line(25, 63, 185, 63);
+        
+        // Reset text color to black for content
+        doc.setTextColor(0, 0, 0);
+        
+        doc.setFontSize(11);
+        const studentInfo = [
+            ["T.C. Kimlik No", ":", examData.tcId],
+            ["Ad Soyad", ":", examData.studentFullName],
+            ["Doğum Tarihi", ":", examData.birthDate],
+            ["Okul", ":", examData.studentSchoolName],
+            ["Veli Adı Soyadı", ":", examData.parentFullName],
+            ["Telefon Numarası", ":", examData.phoneNumber]
+        ];
+        
+        let y = 75;
+        studentInfo.forEach(([label, separator, value]) => {
+            doc.setFont("DejaVuSans", "bold");
+            doc.text(label, 25, y);
+            doc.text(separator, 70, y);
+            doc.setFont("DejaVuSans", "normal");
+            doc.text(value, 75, y);
+            y += 12;
+        });
+        
+        // Add exam location section
+        doc.setFontSize(16);
+        doc.setFont("DejaVuSans", "bold");
+        doc.setTextColor(0, 51, 102); // Navy blue for section headers
+        doc.text("SINAV YERİ BİLGİLERİ", 25, y + 15);
+        
+        // Add horizontal line under section header
+        doc.line(25, y + 18, 185, y + 18);
+        
+        // Reset text color to black for content
+        doc.setTextColor(0, 0, 0);
+        
+        doc.setFontSize(11);
+        const examInfo = [
+            ["Sınav Tarihi", ":", "19.04.2025"],
+            ["Sınav Binası", ":", examData.schoolName],
+            ["Sınav Salonu", ":", examData.hallName],
+            ["Sıra No", ":", examData.orderNumber.toString()]
+        ];
+        
+        y += 30;
+        examInfo.forEach(([label, separator, value]) => {
+            doc.setFont("DejaVuSans", "bold");
+            doc.text(label, 25, y);
+            doc.text(separator, 70, y);
+            doc.setFont("DejaVuSans", "normal");
+            doc.text(value, 75, y);
+            y += 12;
+        });
+        
+        // Add important notes section
+        doc.setFontSize(16);
+        doc.setFont("DejaVuSans", "bold");
+        doc.setTextColor(0, 51, 102); // Navy blue for section headers
+        doc.text("ÖNEMLİ NOTLAR", 25, y + 15);
+        
+        // Add horizontal line under section header
+        doc.line(25, y + 18, 185, y + 18);
+        
+        // Reset text color to black for content
+        doc.setTextColor(0, 0, 0);
+        
+        doc.setFontSize(10);
+        doc.setFont("DejaVuSans", "normal");
+        const notes = [
+            "• Sınava gelirken bu belgeyi ve kimlik kartınızı yanınızda getirmeyi unutmayınız.",
+            "• Sınavdan en az 30 dakika önce sınav yerinde hazır bulununuz.",
+            "• Cep telefonu, akıllı saat vb. elektronik cihazlar sınav salonuna alınmayacaktır.",
+            "• Sınav süresi boyunca sınav görevlilerinin tüm uyarılarına uyunuz."
+        ];
+        
+        y += 30;
+        notes.forEach(note => {
+            const lines = doc.splitTextToSize(note, 160);
+            lines.forEach((line: string) => {
+                doc.text(line, 25, y);
+                y += 7;
+            });
+        });
+        
+        // Save the PDF
+        doc.save(`sinav_giris_belgesi_${examData.tcId}.pdf`);
     }
 </script>
 
@@ -375,6 +572,12 @@
     <div class="content-wrapper">
         <div class="form-column">
             <h1>Recep Tayyip Erdoğan Proje İmam Hatip Lisesi <br> 5. Sınıf Kayıt Kabul Sınavı Başvuru Formu</h1>
+            
+            <div class="deadline-banner">
+                <span class="deadline-icon">⏰</span>
+                <h2>Son Başvuru Tarihi: 1 Nisan 2025</h2>
+                <span class="deadline-icon">⏰</span>
+            </div>
             
             <form on:submit|preventDefault={handleSubmit} class="form">
                 <div class="form-group">
@@ -420,17 +623,36 @@
 
                 <div class="form-group">
                     <label for="schoolName">Okul Adı</label>
-                    <select
-                        id="schoolName"
-                        bind:value={formData.schoolName}
-                        required
-                        class="school-select"
-                    >
-                        <option value="">Okul seçiniz</option>
-                        {#each schools as school}
-                            <option value={school}>{school}</option>
-                        {/each}
-                    </select>
+                    <div class="school-input-container">
+                        <select
+                            id="schoolName"
+                            value={isCustomSchool ? "DİĞER" : formData.schoolName}
+                            required
+                            class="school-select"
+                            class:expanded={isCustomSchool}
+                            on:change={handleSchoolSelect}
+                        >
+                            <option value="">Okul seçiniz</option>
+                            {#each schools as school}
+                                <option value={school}>{school}</option>
+                            {/each}
+                            <option value="DİĞER">DİĞER OKUL</option>
+                        </select>
+                        {#if isCustomSchool}
+                            <div class="custom-school-container" transition:fade>
+                                <input
+                                    type="text"
+                                    id="customSchoolName"
+                                    bind:value={customSchoolName}
+                                    required
+                                    placeholder="Okul adını giriniz"
+                                    class="custom-school-input"
+                                    on:input={handleCustomSchoolInput}
+                                />
+                                <small class="helper-text">Lütfen okulunuzun tam adını giriniz</small>
+                            </div>
+                        {/if}
+                    </div>
                 </div>
 
                 <div class="form-group">
@@ -466,6 +688,54 @@
                 
                 <button type="submit" class="submit-btn">Başvuruyu Gönder</button>
             </form>
+
+            {#if examData}
+                <div class="exam-info" transition:fade>
+                    <h2>Sınav Bilgileri</h2>
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <span class="label">Ad Soyad:</span>
+                            <span class="value">{examData.studentFullName}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Okul:</span>
+                            <span class="value">{examData.studentSchoolName}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Veli Adı Soyadı:</span>
+                            <span class="value">{examData.parentFullName}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Telefon Numarası:</span>
+                            <span class="value">{examData.phoneNumber}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Sınav Tarihi:</span>
+                            <span class="value">19.04.2025</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Sınav Binası:</span>
+                            <span class="value">{examData.schoolName}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Sınav Salonu:</span>
+                            <span class="value">{examData.hallName}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Sıra No:</span>
+                            <span class="value">{examData.orderNumber.toString()}</span>
+                        </div>
+                    </div>
+                    <button 
+                        class="download-btn" 
+                        on:click={downloadExamDocument}
+                        bind:this={downloadButton}
+                    >
+                        <span class="icon">📄</span>
+                        SINAV GİRİŞ BELGESİNİ İNDİR
+                    </button>
+                </div>
+            {/if}
         </div>
         <div class="action-column">
             <div class="action-buttons">
@@ -796,15 +1066,30 @@
         font-size: 1.5rem;
     }
 
+    .school-input-container {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        position: relative;
+    }
+
     .school-select {
         width: 100%;
         padding: 0.875rem;
         border: 2px solid #e2e8f0;
         border-radius: 8px;
         font-size: 1rem;
-        transition: all 0.2s ease;
+        transition: all 0.3s ease;
         background-color: #f8fafc;
         cursor: pointer;
+        -webkit-appearance: none;
+        -moz-appearance: none;
+        appearance: none;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%234a5568' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 0.875rem center;
+        background-size: 1.25rem;
+        padding-right: 2.5rem;
     }
     
     .school-select:focus {
@@ -813,8 +1098,147 @@
         box-shadow: 0 0 0 3px rgba(49, 130, 206, 0.1);
         background-color: #ffffff;
     }
+
+    .school-select.expanded {
+        border-bottom-left-radius: 0;
+        border-bottom-right-radius: 0;
+        border-bottom-color: transparent;
+    }
     
     .school-select option {
         padding: 0.5rem;
+        background-color: white;
+    }
+
+    .custom-school-container {
+        background-color: white;
+        border: 2px solid #3182ce;
+        border-top: none;
+        border-bottom-left-radius: 8px;
+        border-bottom-right-radius: 8px;
+        padding: 1rem;
+    }
+
+    .custom-school-input {
+        width: 100%;
+        padding: 0.875rem;
+        border: 2px solid #e2e8f0;
+        border-radius: 8px;
+        font-size: 1rem;
+        transition: all 0.2s ease;
+        background-color: #f8fafc;
+    }
+    
+    .custom-school-input:focus {
+        outline: none;
+        border-color: #3182ce;
+        box-shadow: 0 0 0 3px rgba(49, 130, 206, 0.1);
+        background-color: #ffffff;
+    }
+
+    .helper-text {
+        display: block;
+        color: #718096;
+        font-size: 0.875rem;
+        margin-top: 0.5rem;
+        padding-left: 0.5rem;
+    }
+
+    .exam-info {
+        margin-top: 2rem;
+        padding: 2rem;
+        background: #f7fafc;
+        border-radius: 8px;
+        border: 2px solid #e2e8f0;
+    }
+
+    .info-grid {
+        display: grid;
+        gap: 1rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .info-item {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+    }
+
+    .label {
+        font-weight: 600;
+        color: #4a5568;
+        font-size: 0.9rem;
+    }
+
+    .value {
+        color: #2d3748;
+        font-size: 1.1rem;
+    }
+
+    .download-btn {
+        background: linear-gradient(to right, #3182ce, #2c5282);
+        color: white;
+        padding: 1rem;
+        border: none;
+        border-radius: 8px;
+        font-size: 1.1rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        margin-top: 1rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+        text-decoration: none;
+    }
+
+    .download-btn:hover {
+        background: linear-gradient(to right, #2c5282, #2a4365);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(49, 130, 206, 0.2);
+    }
+
+    .download-btn:active {
+        transform: translateY(0);
+    }
+
+    .deadline-banner {
+        background: linear-gradient(to right, #ebf8ff, #e6fffa);
+        border: 2px solid #3182ce;
+        border-radius: 8px;
+        padding: 1rem;
+        margin: 1.5rem 0 2.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 1rem;
+        animation: pulse 2s infinite;
+    }
+
+    .deadline-banner h2 {
+        color: #2c5282;
+        font-size: 1.5rem;
+        font-weight: 700;
+        margin: 0;
+        text-align: center;
+    }
+
+    .deadline-icon {
+        font-size: 1.5rem;
+    }
+
+    @keyframes pulse {
+        0% {
+            box-shadow: 0 0 0 0 rgba(49, 130, 206, 0.4);
+        }
+        70% {
+            box-shadow: 0 0 0 10px rgba(49, 130, 206, 0);
+        }
+        100% {
+            box-shadow: 0 0 0 0 rgba(49, 130, 206, 0);
+        }
     }
 </style>

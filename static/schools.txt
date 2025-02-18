@@ -121,3 +121,7 @@ NEVŞEHİR - ÜRGÜP - Sarıhıdır İlkokulu
 NEVŞEHİR - ÜRGÜP - Sofular İlkokulu		
 NEVŞEHİR - ÜRGÜP - Türkan Diker İlkokulu		
 NEVŞEHİR - ÜRGÜP - Ürgüp 15 Temmuz İlkokulu
+ÖZEL Kardelen İlkokulu
+ÖZEL Altınyıldız İlkokulu
+ÖZEL Simya İlkokulu
+ÖZEL MBA İlkokulu

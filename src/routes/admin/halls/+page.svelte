@@ -82,7 +82,30 @@
                 capacity: doc.data().capacity,
                 schoolId: school.id,
                 schoolName: school.name
-            }));
+            })).sort((a, b) => {
+                // Split the names into parts (letters and numbers)
+                const aParts = a.name.match(/([a-zA-ZğüşıöçĞÜŞİÖÇ]+|\d+)/g) || [];
+                const bParts = b.name.match(/([a-zA-ZğüşıöçĞÜŞİÖÇ]+|\d+)/g) || [];
+                
+                // Compare each part
+                for (let i = 0; i < Math.min(aParts.length, bParts.length); i++) {
+                    const aIsNum = /^\d+$/.test(aParts[i]);
+                    const bIsNum = /^\d+$/.test(bParts[i]);
+                    
+                    if (aIsNum && bIsNum) {
+                        // If both parts are numbers, compare numerically
+                        const diff = parseInt(aParts[i]) - parseInt(bParts[i]);
+                        if (diff !== 0) return diff;
+                    } else {
+                        // If either part is not a number, compare as strings
+                        const diff = aParts[i].localeCompare(bParts[i], 'tr');
+                        if (diff !== 0) return diff;
+                    }
+                }
+                
+                // If all parts match up to the shortest length, shorter name comes first
+                return aParts.length - bParts.length;
+            });
             showNotification('Sınav salonları başarıyla yüklendi.', 'success');
         } catch (error) {
             console.error("Error loading exam halls: ", error);
@@ -219,12 +242,10 @@
                 const studentsSnapshot = await getDocs(collection(db, "schools", hall.schoolId, "examHalls", hall.id, "students"));
                 const students = studentsSnapshot.docs.map(doc => doc.data());
 
-                if (students.length === 0) {
-                    continue; // Skip halls with no students
+                // Sort students by order number if there are any
+                if (students.length > 0) {
+                    students.sort((a, b) => a.orderNumber - b.orderNumber);
                 }
-
-                // Sort students by order number
-                students.sort((a, b) => a.orderNumber - b.orderNumber);
 
                 // Add new page for each hall (except first)
                 if (hallIndex > 0) {
@@ -239,10 +260,10 @@
                 doc.rect(15, 15, 180, 30); // Header border
                 
                 // Add header text
-                doc.setFontSize(22);
+                doc.setFontSize(18);
                 doc.setFont("DejaVuSans", "bold");
                 doc.setTextColor(0, 51, 102); // Navy blue color for main title
-                doc.text("SINAV SALONU ÖĞRENCİ LİSTESİ", 105, 32, { align: "center" });
+                doc.text(`${hall.name} SINAV SALONU ÖĞRENCİ LİSTESİ`, 105, 32, { align: "center" });
                 
                 // Add hall information section
                 doc.setFontSize(16);
@@ -260,11 +281,11 @@
                 doc.setFontSize(11);
                 let hallInfo: [string, string, string][] = [];
                 if (hall.capacity >= students.length) {
-                hallInfo = [
-                    ["Okul", ":", hall.schoolName],
-                    ["Salon / Kapasite", ":", `${hall.name} / ${hall.capacity} kişilik`],
-                    ["Öğrenci Sayısı / Sınav Tarihi", ":", `${students.length} öğrenci / 19.04.2025`]
-                ];
+                    hallInfo = [
+                        ["Okul", ":", hall.schoolName],
+                        ["Salon / Kapasite", ":", `${hall.name} / ${hall.capacity} kişilik`],
+                        ["Öğrenci Sayısı / Sınav Tarihi", ":", `${students.length} öğrenci / 19.04.2025`]
+                    ];
                 } else {
                     hallInfo = [
                         ["Okul", ":", hall.schoolName],
@@ -317,31 +338,35 @@
                 y += 8;
                 doc.setFont("DejaVuSans", "normal");
                 
-                students.forEach((student, index) => {
-                    if (y > 270) { // Check if we need a new page
-                        doc.addPage();
-                        currentPage++;
-                        y = 30;
+                if (students.length === 0) {
+                    doc.text("Bu salonda henüz öğrenci bulunmamaktadır.", 25, y);
+                } else {
+                    students.forEach((student, index) => {
+                        if (y > 270) { // Check if we need a new page
+                            doc.addPage();
+                            currentPage++;
+                            y = 30;
+                            
+                            // Redraw header on new page
+                            doc.setFont("DejaVuSans", "bold");
+                            columns.forEach(col => {
+                                doc.text(col.header, col.x, y);
+                            });
+                            y += 2;
+                            doc.line(25, y, 185, y);
+                            y += 8;
+                            doc.setFont("DejaVuSans", "normal");
+                        }
                         
-                        // Redraw header on new page
-                        doc.setFont("DejaVuSans", "bold");
-                        columns.forEach(col => {
-                            doc.text(col.header, col.x, y);
-                        });
-                        y += 2;
-                        doc.line(25, y, 185, y);
-                        y += 8;
-                        doc.setFont("DejaVuSans", "normal");
-                    }
-                    
-                    // Draw student data
-                    doc.text(student.orderNumber.toString(), columns[0].x, y);
-                    doc.text(student.tcId, columns[1].x, y);
-                    doc.text(student.studentFullName, columns[2].x, y);
-                    doc.text(student.birthDate, columns[3].x, y);
-                    
-                    y += 7;
-                });
+                        // Draw student data
+                        doc.text(student.orderNumber.toString(), columns[0].x, y);
+                        doc.text(student.tcId, columns[1].x, y);
+                        doc.text(student.studentFullName, columns[2].x, y);
+                        doc.text(student.birthDate, columns[3].x, y);
+                        
+                        y += 7;
+                    });
+                }
             }
             
             // Add footer to all pages

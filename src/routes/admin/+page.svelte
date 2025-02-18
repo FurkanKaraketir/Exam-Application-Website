@@ -12,17 +12,17 @@
         parentFullName: string;
         phoneNumber: string;
         hallName?: string;
-        timestamp: Date;
-        studentSchoolName?: string;
         assignedAt?: Date;
+        studentSchoolName?: string;
         schoolId?: string;
         hallId?: string;
+        orderNumber?: number;
     }
 
     let applications: ExamApplication[] = [];
     let filteredApplications: ExamApplication[] = [];
     let searchTerm = '';
-    let sortField: keyof ExamApplication = 'timestamp';
+    let sortField: keyof ExamApplication = 'assignedAt';
     let sortDirection: 'asc' | 'desc' = 'desc';
     let selectedApplication: ExamApplication | null = null;
     let isEditModalOpen = false;
@@ -84,11 +84,11 @@
                 parentFullName: doc.data().parentFullName || '',
                 phoneNumber: doc.data().phoneNumber || '',
                 hallName: doc.data().hallName,
-                timestamp: doc.data().timestamp?.toDate() || new Date(),
-                studentSchoolName: doc.data().studentSchoolName || '',
                 assignedAt: doc.data().assignedAt?.toDate() || null,
+                studentSchoolName: doc.data().studentSchoolName || '',
                 schoolId: doc.data().schoolId || '',
-                hallId: doc.data().hallId || ''
+                hallId: doc.data().hallId || '',
+                orderNumber: doc.data().orderNumber || null
             } as ExamApplication));
             filterApplications();
             showNotification('Başvurular başarıyla yüklendi.', 'success');
@@ -228,7 +228,7 @@
         try {
             // Create worksheet data
             const wsData = [
-                ['T.C. Kimlik No', 'Öğrenci Adı Soyadı', 'Doğum Tarihi', 'Veli Adı Soyadı', 'Telefon','Sınav Binası', 'Sınav Salonu', 'Başvuru Tarihi'],
+                ['T.C. Kimlik No', 'Öğrenci Adı Soyadı', 'Doğum Tarihi', 'Veli Adı Soyadı', 'Telefon','Sınav Binası', 'Sınav Salonu', 'Sıra No', 'Başvuru Tarihi'],
                 ...filteredApplications.map(app => [
                     app.tcId,
                     app.studentFullName,
@@ -237,7 +237,8 @@
                     app.phoneNumber,
                     app.schoolName,
                     app.hallName || '-',
-                    app.timestamp ? new Date(app.timestamp).toLocaleDateString('tr-TR') : '-'
+                    app.orderNumber?.toString() || '-',
+                    app.assignedAt ? new Date(app.assignedAt).toLocaleDateString('tr-TR') : '-'
                 ])
             ];
 
@@ -253,6 +254,7 @@
                 { wch: 15 },  // Phone
                 { wch: 35 },  // School
                 { wch: 20 },  // Hall
+                { wch: 10 },  // Order Number
                 { wch: 15 }   // Application Date
             ];
             ws['!cols'] = colWidths;
@@ -265,7 +267,7 @@
             };
 
             // Apply header styles
-            for (let i = 0; i < 8; i++) {
+            for (let i = 0; i < 9; i++) {
                 const cellRef = XLSX.utils.encode_cell({ r: 0, c: i });
                 ws[cellRef].s = headerStyle;
             }
@@ -423,6 +425,17 @@
                             <span class="sort-indicator">{sortDirection === 'asc' ? '↑' : '↓'}</span>
                         {/if}
                     </th>
+                    <th 
+                        on:click={() => handleSort('orderNumber')}
+                        on:keydown={(e) => e.key === 'Enter' && handleSort('orderNumber')}
+                        role="button"
+                        tabindex="0"
+                    >
+                        Sıra No
+                        {#if sortField === 'orderNumber'}
+                            <span class="sort-indicator">{sortDirection === 'asc' ? '↑' : '↓'}</span>
+                        {/if}
+                    </th>
                     <th>İşlemler</th>
                 </tr>
             </thead>
@@ -436,6 +449,7 @@
                         <td>{application.parentFullName}</td>
                         <td>{application.phoneNumber}</td>
                         <td>{application.hallName || '-'}</td>
+                        <td>{application.orderNumber || '-'}</td>
                         <td>
                             <div class="action-buttons">
                                 <button class="edit-btn" on:click={() => openEditModal(application)}>
@@ -534,6 +548,16 @@
                     />
                 </div>
 
+                <div class="form-group">
+                    <label for="orderNumber">Sıra No</label>
+                    <input
+                        type="number"
+                        id="orderNumber"
+                        bind:value={editFormData.orderNumber}
+                        min="1"
+                    />
+                </div>
+
                 <div class="modal-actions">
                     <button type="button" class="cancel-btn" on:click={closeEditModal}>
                         İptal
@@ -589,7 +613,7 @@
 
 <style>
     .container {
-        max-width: 1200px;
+        max-width: 95%;
         margin: 0 auto;
         padding: 2rem;
     }
@@ -598,6 +622,8 @@
         display: flex;
         gap: 1rem;
         margin-bottom: 2rem;
+        flex-wrap: nowrap;
+        min-width: max-content;
     }
 
     .search-input {
@@ -657,24 +683,43 @@
         background: white;
         border-radius: 8px;
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        padding: 1rem;
+        margin: 0;
+        min-width: 100%;
     }
 
     table {
         width: 100%;
         border-collapse: collapse;
+        table-layout: auto;
+        min-width: max-content;
     }
 
     th, td {
         padding: 1rem;
         text-align: left;
         border-bottom: 1px solid #e2e8f0;
+        white-space: nowrap;
     }
+
+    th:nth-child(1), td:nth-child(1) { width: 140px; } /* TC ID */
+    th:nth-child(2), td:nth-child(2) { width: 250px; } /* Student Name */
+    th:nth-child(3), td:nth-child(3) { width: 140px; } /* Birth Date */
+    th:nth-child(4), td:nth-child(4) { width: 250px; } /* School */
+    th:nth-child(5), td:nth-child(5) { width: 250px; } /* Parent Name */
+    th:nth-child(6), td:nth-child(6) { width: 140px; } /* Phone */
+    th:nth-child(7), td:nth-child(7) { width: 180px; } /* Exam Hall */
+    th:nth-child(8), td:nth-child(8) { width: 120px; } /* Order No */
+    th:nth-child(9), td:nth-child(9) { width: 140px; } /* Actions */
 
     th {
         background: #f7fafc;
         font-weight: 600;
         cursor: pointer;
         transition: background-color 0.2s ease;
+        position: sticky;
+        top: 0;
+        z-index: 10;
     }
 
     th:hover {
@@ -916,8 +961,18 @@
 
     @media (max-width: 768px) {
         .container {
-            margin: 0.5rem;
+            max-width: 100%;
+            margin: 0;
             padding: 1rem;
+        }
+
+        .table-container {
+            margin: 0;
+            padding: 0;
+        }
+
+        table {
+            min-width: max-content;
         }
 
         .controls {
@@ -934,22 +989,14 @@
             font-size: 0.95rem;
         }
 
-        .table-container {
-            margin: 1rem -1rem;
-            border-radius: 0;
-            box-shadow: none;
-        }
-
-        table {
-            display: block;
-            overflow-x: auto;
-            white-space: nowrap;
-            -webkit-overflow-scrolling: touch;
-        }
-
         th, td {
             padding: 0.75rem;
             font-size: 0.9rem;
+            white-space: nowrap;
+        }
+
+        th:nth-child(n), td:nth-child(n) {
+            min-width: unset;
         }
 
         .action-buttons {
