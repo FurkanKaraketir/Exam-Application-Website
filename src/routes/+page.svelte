@@ -9,7 +9,6 @@
     let formData = {
         tcId: '',
         studentFullName: '',
-        birthDate: '',
         schoolName: '',
         parentFullName: '',
         phoneNumber: '',
@@ -23,7 +22,6 @@
     let examData: {
         tcId: string;
         studentFullName: string;
-        birthDate: string;
         studentSchoolName: string;
         parentFullName: string;
         phoneNumber: string;
@@ -152,8 +150,36 @@
     
     function handlePhoneInput(event: Event) {
         const input = event.target as HTMLInputElement;
-        const formatted = input.value.replace(/[^0-9]/g, '').slice(0, 10);
+        // Remove all non-numeric characters and any leading zeros
+        let formatted = input.value.replace(/[^0-9]/g, '').replace(/^0+/, '');
+        
+        // Ensure the number starts with valid Turkish mobile prefix
+        if (formatted.length > 0 && !['5'].includes(formatted[0])) {
+            formatted = '';
+        }
+        
+        // Limit to 10 digits
+        formatted = formatted.slice(0, 10);
+        
+        // Store raw value in formData
         formData.phoneNumber = formatted;
+        
+        // Format for display with parentheses
+        if (formatted.length > 0) {
+            let displayValue = '(' + formatted.slice(0, 3);
+            if (formatted.length > 3) {
+                displayValue += ') ' + formatted.slice(3, 6);
+                if (formatted.length > 6) {
+                    displayValue += ' ' + formatted.slice(6, 8);
+                    if (formatted.length > 8) {
+                        displayValue += ' ' + formatted.slice(8, 10);
+                    }
+                }
+            }
+            input.value = displayValue;
+        } else {
+            input.value = '';
+        }
         
         if (formatted.length === 0) {
             legalErrors.phoneNumber = '';
@@ -161,6 +187,9 @@
         } else if (formatted.length !== 10) {
             legalErrors.phoneNumber = '10 haneli telefon numarası giriniz.';
             input.setCustomValidity('10 haneli telefon numarası giriniz.');
+        } else if (!formatted.startsWith('5')) {
+            legalErrors.phoneNumber = 'Geçerli bir cep telefonu numarası giriniz.';
+            input.setCustomValidity('Geçerli bir cep telefonu numarası giriniz.');
         } else {
             legalErrors.phoneNumber = '';
             input.setCustomValidity('');
@@ -279,7 +308,6 @@
                             schoolName: schoolData.name,
                             studentSchoolName: formData.schoolName,
                             parentFullName: formData.parentFullName,
-                            birthDate: formData.birthDate,
                             phoneNumber: formData.phoneNumber,
                             hallName: hallData.name,
                             hallId: hallData.id,
@@ -334,7 +362,6 @@
                                 schoolName: school.data().name,
                                 studentSchoolName: formData.schoolName,
                                 parentFullName: formData.parentFullName,
-                                birthDate: formData.birthDate,
                                 phoneNumber: formData.phoneNumber,
                                 hallName: hallData.name,
                                 hallId: hall.id,
@@ -393,7 +420,6 @@
                 examData = examDocSnap.data() as {
                     tcId: string;
                     studentFullName: string;
-                    birthDate: string;
                     studentSchoolName: string;
                     parentFullName: string;
                     phoneNumber: string;
@@ -417,7 +443,6 @@
             formData = {
                 tcId: '',
                 studentFullName: '',
-                birthDate: '',
                 schoolName: '',
                 parentFullName: '',
                 phoneNumber: '',
@@ -445,26 +470,26 @@
         doc.setDrawColor(0, 51, 102); // Navy blue color for borders
         doc.setLineWidth(0.5);
         doc.rect(10, 10, 190, 277); // Outer border
-        doc.rect(15, 15, 180, 30); // Header border
+        doc.rect(15, 15, 180, 20); // Header border - reduced height from 30 to 20
         
         // Add header text
-        doc.setFontSize(22);
+        doc.setFontSize(16); // Reduced from 22 to 16
         doc.setFont("DejaVuSans", "bold");
         doc.setTextColor(0, 51, 102); // Navy blue color for main title
-        doc.text("SINAV GİRİŞ BELGESİ", 105, 32, { align: "center" });
+        doc.text("SINAV GİRİŞ BELGESİ", 105, 28, { align: "center" }); // Adjusted Y position from 32 to 28
     
         // Reset text color to black for content
         doc.setTextColor(0, 0, 0);
         
         // Add student information section
-        doc.setFontSize(16);
+        doc.setFontSize(14); // Reduced from 16 to 14
         doc.setFont("DejaVuSans", "bold");
         doc.setTextColor(0, 51, 102); // Navy blue for section headers
-        doc.text("ÖĞRENCİ BİLGİLERİ", 25, 60);
+        doc.text("ÖĞRENCİ BİLGİLERİ", 25, 50); // Adjusted Y position from 60 to 50
         
         // Add horizontal line under section header
         doc.setDrawColor(0, 51, 102);
-        doc.line(25, 63, 185, 63);
+        doc.line(25, 53, 185, 53); // Adjusted Y position from 63 to 53
         
         // Reset text color to black for content
         doc.setTextColor(0, 0, 0);
@@ -473,30 +498,34 @@
         const studentInfo = [
             ["T.C. Kimlik No", ":", examData.tcId],
             ["Ad Soyad", ":", examData.studentFullName],
-            ["Doğum Tarihi", ":", examData.birthDate],
             ["Okul", ":", examData.studentSchoolName],
             ["Veli Adı Soyadı", ":", examData.parentFullName],
             ["Telefon Numarası", ":", examData.phoneNumber]
         ];
         
-        let y = 75;
+        let y = 65; // Adjusted from 75 to 65
         studentInfo.forEach(([label, separator, value]) => {
             doc.setFont("DejaVuSans", "bold");
             doc.text(label, 25, y);
             doc.text(separator, 70, y);
             doc.setFont("DejaVuSans", "normal");
-            doc.text(value, 75, y);
-            y += 12;
+            // Handle long text by splitting into multiple lines if needed
+            const maxWidth = 110; // Maximum width for the value text
+            const lines = doc.splitTextToSize(value, maxWidth);
+            lines.forEach((line: string, index: number) => {
+                doc.text(line, 75, y + (index * 6));
+            });
+            y += 12 + (lines.length - 1) * 6; // Adjust spacing based on number of lines
         });
         
         // Add exam location section
-        doc.setFontSize(16);
+        doc.setFontSize(14); // Reduced from 16 to 14
         doc.setFont("DejaVuSans", "bold");
         doc.setTextColor(0, 51, 102); // Navy blue for section headers
-        doc.text("SINAV YERİ BİLGİLERİ", 25, y + 15);
+        doc.text("SINAV YERİ BİLGİLERİ", 25, y + 5);
         
         // Add horizontal line under section header
-        doc.line(25, y + 18, 185, y + 18);
+        doc.line(25, y + 8, 185, y + 8);
         
         // Reset text color to black for content
         doc.setTextColor(0, 0, 0);
@@ -509,24 +538,29 @@
             ["Sıra No", ":", examData.orderNumber.toString()]
         ];
         
-        y += 30;
+        y += 15;
         examInfo.forEach(([label, separator, value]) => {
             doc.setFont("DejaVuSans", "bold");
             doc.text(label, 25, y);
             doc.text(separator, 70, y);
             doc.setFont("DejaVuSans", "normal");
-            doc.text(value, 75, y);
-            y += 12;
+            // Handle long text by splitting into multiple lines if needed
+            const maxWidth = 110; // Maximum width for the value text
+            const lines = doc.splitTextToSize(value, maxWidth);
+            lines.forEach((line: string, index: number) => {
+                doc.text(line, 75, y + (index * 6));
+            });
+            y += 12 + (lines.length - 1) * 6; // Adjust spacing based on number of lines
         });
         
         // Add important notes section
         doc.setFontSize(16);
         doc.setFont("DejaVuSans", "bold");
         doc.setTextColor(0, 51, 102); // Navy blue for section headers
-        doc.text("ÖNEMLİ NOTLAR", 25, y + 15);
+        doc.text("ÖNEMLİ NOTLAR", 25, y + 10);
         
         // Add horizontal line under section header
-        doc.line(25, y + 18, 185, y + 18);
+        doc.line(25, y + 13, 185, y + 13);
         
         // Reset text color to black for content
         doc.setTextColor(0, 0, 0);
@@ -534,7 +568,7 @@
         doc.setFontSize(10);
         doc.setFont("DejaVuSans", "normal");
         
-        y += 30;
+        y += 20;
         notes.forEach(note => {
             const lines = doc.splitTextToSize(`• ${note}`, 160);
             lines.forEach((line: string) => {
@@ -543,12 +577,13 @@
             });
         });
         
+        const qr_location = 160;
         // Add QR code for school location
-        doc.addImage(`/${examData.schoolId}.png`, 'PNG', 160, 175, 30, 30);
+        doc.addImage(`/${examData.schoolId}.png`, 'PNG', 155, qr_location, 30, 30);
         doc.setFontSize(10);
         doc.setFont("DejaVuSans", "bold");
         doc.setTextColor(0, 51, 102);
-        doc.text('Okul Konumu', 175, 210, { align: 'center' });
+        doc.text('Okul Konumu', 170, qr_location + 35, { align: 'center' });
         
         // Save the PDF
         doc.save(`sinav_giris_belgesi_${examData.tcId}.pdf`);
@@ -624,19 +659,9 @@
                         type="text"
                         id="studentFullName"
                         bind:value={formData.studentFullName}
-                        required
-                        placeholder="Öğrencinin adını ve soyadını giriniz"
                         on:input={(e) => handleNameInput(e, 'studentFullName')}
-                    />
-                </div>
-
-                <div class="form-group">
-                    <label for="birthDate">Doğum Tarihi</label>
-                    <input
-                        type="date"
-                        id="birthDate"
-                        bind:value={formData.birthDate}
                         required
+                        placeholder="Öğrenci adı soyadı"
                     />
                 </div>
 
@@ -691,13 +716,12 @@
                     <input
                         type="text"
                         id="phoneNumber"
-                        bind:value={formData.phoneNumber}
+                        on:input={handlePhoneInput}
                         required
                         minlength="10"
-                        maxlength="10"
+                        maxlength="15"
                         inputmode="numeric"
-                        placeholder="Telefon numarasını giriniz (5XX...)"
-                        on:input={handlePhoneInput}
+                        placeholder="(5XX) XXX XX XX"
                         class:invalid={legalErrors.phoneNumber !== ''}
                     />
                     {#if legalErrors.phoneNumber}
@@ -718,7 +742,7 @@
                         </div>
                         <div class="info-item">
                             <span class="label">Okul:</span>
-                            <span class="value">{examData.studentSchoolName}</span>
+                            <span class="value">{examData.schoolName}</span>
                         </div>
                         <div class="info-item">
                             <span class="label">Veli Adı Soyadı:</span>
@@ -744,6 +768,14 @@
                             <span class="label">Sıra No:</span>
                             <span class="value">{examData.orderNumber.toString()}</span>
                         </div>
+                    </div>
+                    <div class="qr-section">
+                        <img 
+                            src="/{examData.schoolId}.png" 
+                            alt="Okul Konumu QR Kodu"
+                            class="qr-code"
+                        />
+                        <span class="qr-label">Okul Konumu QR Kodu</span>
                     </div>
                     <button 
                         class="download-btn" 
@@ -1192,6 +1224,29 @@
     .value {
         color: #2d3748;
         font-size: 1.1rem;
+    }
+
+    .qr-section {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        margin: 1.5rem 0;
+        gap: 0.5rem;
+    }
+
+    .qr-code {
+        width: 120px;
+        height: 120px;
+        border: 2px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 0.5rem;
+        background: white;
+    }
+
+    .qr-label {
+        color: #4a5568;
+        font-size: 0.9rem;
+        font-weight: 600;
     }
 
     .download-btn {

@@ -7,7 +7,6 @@
     interface ExamApplication {
         tcId: string;
         studentFullName: string;
-        birthDate: string;
         schoolName: string;
         parentFullName: string;
         phoneNumber: string;
@@ -30,6 +29,10 @@
     let schools: string[] = [];
     let isAddSchoolModalOpen = false;
     let newSchoolName = '';
+    let totalCapacity = 0;
+    let assignedCount = 0;
+    let isDeleteModalOpen = false;
+    let applicationToDelete: ExamApplication | null = null;
 
     type NotificationType = 'success' | 'error' | 'warning';
     type Notification = {
@@ -54,11 +57,37 @@
         notifications = notifications.filter(n => n.id !== id);
     }
 
+    async function loadCapacityStats() {
+        try {
+            let total = 0;
+            let assigned = 0;
+            const schoolsQuery = query(collection(db, "schools"));
+            const schoolsSnapshot = await getDocs(schoolsQuery);
+            
+            for (const schoolDoc of schoolsSnapshot.docs) {
+                const hallsQuery = query(collection(db, "schools", schoolDoc.id, "examHalls"));
+                const hallsSnapshot = await getDocs(hallsQuery);
+                
+                hallsSnapshot.docs.forEach(hallDoc => {
+                    //with extra 5 seats for the examiners
+                    total += (hallDoc.data().capacity || 0) +5 ;
+                });
+            }
+            
+            assigned = applications.filter(app => app.hallName).length;
+            totalCapacity = total;
+            assignedCount = assigned;
+        } catch (error) {
+            console.error("Error loading capacity stats:", error);
+        }
+    }
+
     onMount(async () => {
         await Promise.all([
             loadApplications(),
             loadSchools()
         ]);
+        await loadCapacityStats();
     });
 
     async function loadSchools() {
@@ -79,7 +108,6 @@
             applications = querySnapshot.docs.map((doc: QueryDocumentSnapshot) => ({
                 tcId: doc.id,
                 studentFullName: doc.data().studentFullName || '',
-                birthDate: doc.data().birthDate || '',
                 schoolName: doc.data().schoolName || '',
                 parentFullName: doc.data().parentFullName || '',
                 phoneNumber: doc.data().phoneNumber || '',
@@ -91,6 +119,7 @@
                 orderNumber: doc.data().orderNumber || null
             } as ExamApplication));
             filterApplications();
+            await loadCapacityStats();
             showNotification('Başvurular başarıyla yüklendi.', 'success');
         } catch (error) {
             console.error("Error loading applications: ", error);
@@ -175,26 +204,32 @@
     }
 
     async function handleDelete(application: ExamApplication) {
-        if (!confirm('Bu başvuruyu silmek istediğinizden emin misiniz?')) {
-            return;
-        }
+        applicationToDelete = application;
+        isDeleteModalOpen = true;
+    }
+
+    async function confirmDelete() {
+        if (!applicationToDelete) return;
 
         try {
             // Delete from examApplications collection
-            await deleteDoc(doc(db, "examApplications", application.tcId));
+            await deleteDoc(doc(db, "examApplications", applicationToDelete.tcId));
 
             // If the application has a hall assignment, delete from the hall
-            if (application.hallName && application.schoolName && application.schoolId && application.hallId) {
-                await deleteDoc(doc(db, "schools", application.schoolId, "examHalls", application.hallId, "students", application.tcId));
+            if (applicationToDelete.hallName && applicationToDelete.schoolName && applicationToDelete.schoolId && applicationToDelete.hallId) {
+                await deleteDoc(doc(db, "schools", applicationToDelete.schoolId, "examHalls", applicationToDelete.hallId, "students", applicationToDelete.tcId));
             }
 
             // Update local state
-            applications = applications.filter(app => app.tcId !== application.tcId);
+            applications = applications.filter(app => applicationToDelete && app.tcId !== applicationToDelete.tcId);
             filterApplications();
             showNotification('Başvuru başarıyla silindi.', 'success');
         } catch (error) {
             console.error("Error deleting application: ", error);
             showNotification('Başvuru silinirken bir hata oluştu.', 'error');
+        } finally {
+            isDeleteModalOpen = false;
+            applicationToDelete = null;
         }
     }
 
@@ -228,11 +263,10 @@
         try {
             // Create worksheet data
             const wsData = [
-                ['T.C. Kimlik No', 'Öğrenci Adı Soyadı', 'Doğum Tarihi', 'Veli Adı Soyadı', 'Telefon','Sınav Binası', 'Sınav Salonu', 'Sıra No', 'Başvuru Tarihi'],
+                ['T.C. Kimlik No', 'Öğrenci Adı Soyadı', 'Veli Adı Soyadı', 'Telefon','Sınav Binası', 'Sınav Salonu', 'Sıra No', 'Başvuru Tarihi'],
                 ...filteredApplications.map(app => [
                     app.tcId,
                     app.studentFullName,
-                    app.birthDate,
                     app.parentFullName,
                     app.phoneNumber,
                     app.schoolName,
@@ -249,7 +283,6 @@
             const colWidths = [
                 { wch: 15 },  // TC ID
                 { wch: 30 },  // Student Name
-                { wch: 15 },  // Birth Date
                 { wch: 30 },  // Parent Name
                 { wch: 15 },  // Phone
                 { wch: 35 },  // School
@@ -267,7 +300,7 @@
             };
 
             // Apply header styles
-            for (let i = 0; i < 9; i++) {
+            for (let i = 0; i < 8; i++) {
                 const cellRef = XLSX.utils.encode_cell({ r: 0, c: i });
                 ws[cellRef].s = headerStyle;
             }
@@ -323,6 +356,32 @@
 <main class="container">
     <h1>Sınav Başvuruları</h1>
 
+    <div class="stats-card">
+        <div class="stat-content">
+            <div class="stat-row">
+                <span class="stat-value">{filteredApplications.length}</span>
+                <span class="stat-label">Toplam Başvuru</span>
+            </div>
+            {#if totalCapacity > 0}
+                <div class="capacity-stats">
+                    <div class="capacity-info">
+                        <span class="capacity-text">Kapasite Kullanımı: {assignedCount}/{totalCapacity}</span>
+                        <span class="percentage">%{Math.round((assignedCount / totalCapacity) * 100)}</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div 
+                            class="progress-fill" 
+                            style="width: {Math.min(100, Math.round((assignedCount / totalCapacity) * 100))}%"
+                        ></div>
+                    </div>
+                </div>
+            {/if}
+        </div>
+        {#if searchTerm}
+            <div class="stat-note">({applications.length} başvuru arasından)</div>
+        {/if}
+    </div>
+
     <div class="controls">
         <input
             type="text"
@@ -370,17 +429,6 @@
                     >
                         Öğrenci Adı Soyadı
                         {#if sortField === 'studentFullName'}
-                            <span class="sort-indicator">{sortDirection === 'asc' ? '↑' : '↓'}</span>
-                        {/if}
-                    </th>
-                    <th 
-                        on:click={() => handleSort('birthDate')}
-                        on:keydown={(e) => e.key === 'Enter' && handleSort('birthDate')}
-                        role="button"
-                        tabindex="0"
-                    >
-                        Doğum Tarihi
-                        {#if sortField === 'birthDate'}
                             <span class="sort-indicator">{sortDirection === 'asc' ? '↑' : '↓'}</span>
                         {/if}
                     </th>
@@ -447,7 +495,6 @@
                     <tr>
                         <td>{application.tcId}</td>
                         <td>{application.studentFullName}</td>
-                        <td>{application.birthDate}</td>
                         <td>{application.schoolName}</td>
                         <td>{application.parentFullName}</td>
                         <td>{application.phoneNumber}</td>
@@ -492,16 +539,6 @@
                         type="text"
                         id="studentFullName"
                         bind:value={editFormData.studentFullName}
-                        required
-                    />
-                </div>
-
-                <div class="form-group">
-                    <label for="birthDate">Doğum Tarihi</label>
-                    <input
-                        type="date"
-                        id="birthDate"
-                        bind:value={editFormData.birthDate}
                         required
                     />
                 </div>
@@ -614,11 +651,194 @@
     </div>
 {/if}
 
+{#if isDeleteModalOpen && applicationToDelete}
+    <div 
+        class="modal-overlay" 
+        on:click={() => isDeleteModalOpen = false}
+        on:keydown={(e) => e.key === 'Escape' && (isDeleteModalOpen = false)}
+        role="button"
+        tabindex="0"
+    >
+        <div 
+            class="modal delete-confirmation-modal" 
+            on:click|stopPropagation
+            on:keydown|stopPropagation
+            role="presentation"
+        >
+            <div class="delete-icon">
+                <span>!</span>
+            </div>
+            <h2>Başvuru Silme Onayı</h2>
+            <p class="delete-message">
+                <strong>{applicationToDelete.studentFullName}</strong> isimli öğrencinin başvurusunu silmek istediğinizden emin misiniz?
+            </p>
+            <p class="delete-warning">Bu işlem geri alınamaz!</p>
+            <div class="modal-actions">
+                <button 
+                    type="button" 
+                    class="cancel-btn" 
+                    on:click={() => {
+                        isDeleteModalOpen = false;
+                        applicationToDelete = null;
+                    }}
+                >
+                    İptal
+                </button>
+                <button type="button" class="confirm-delete-btn" on:click={confirmDelete}>
+                    Sil
+                </button>
+            </div>
+        </div>
+    </div>
+{/if}
+
 <style>
     .container {
         max-width: 95%;
         margin: 0 auto;
         padding: 2rem;
+    }
+
+    .stats-card {
+        background: linear-gradient(135deg, #3182ce, #2c5282);
+        border-radius: 16px;
+        padding: 2rem;
+        margin-bottom: 2rem;
+        color: white;
+        box-shadow: 0 4px 15px rgba(49, 130, 206, 0.2);
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .stats-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(45deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0) 100%);
+        pointer-events: none;
+    }
+
+    .stats-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(49, 130, 206, 0.3);
+    }
+
+    .stat-content {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 2rem;
+        align-items: center;
+    }
+
+    .stat-row {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.75rem;
+        padding: 1.5rem;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 12px;
+        backdrop-filter: blur(10px);
+    }
+
+    .stat-value {
+        font-size: 2.5rem;
+        font-weight: 700;
+        line-height: 1;
+        background: linear-gradient(to right, #fff, #e2e8f0);
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    .stat-label {
+        font-size: 1.1rem;
+        font-weight: 500;
+        color: rgba(255, 255, 255, 0.9);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .capacity-stats {
+        background: rgba(255, 255, 255, 0.1);
+        padding: 1.5rem;
+        border-radius: 12px;
+        backdrop-filter: blur(10px);
+    }
+
+    .capacity-info {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1rem;
+    }
+
+    .capacity-text {
+        font-size: 1.1rem;
+        font-weight: 500;
+        color: rgba(255, 255, 255, 0.9);
+    }
+
+    .percentage {
+        font-size: 1.25rem;
+        font-weight: 700;
+        padding: 0.5rem 1rem;
+        background: rgba(255, 255, 255, 0.2);
+        border-radius: 20px;
+    }
+
+    .progress-bar {
+        width: 100%;
+        height: 10px;
+        background: rgba(255, 255, 255, 0.2);
+        border-radius: 5px;
+        overflow: hidden;
+        position: relative;
+    }
+
+    .progress-fill {
+        height: 100%;
+        background: linear-gradient(to right, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.7));
+        border-radius: 5px;
+        transition: width 0.5s ease;
+        position: relative;
+    }
+
+    .progress-fill::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(
+            90deg,
+            rgba(255, 255, 255, 0) 0%,
+            rgba(255, 255, 255, 0.3) 50%,
+            rgba(255, 255, 255, 0) 100%
+        );
+        animation: shimmer 2s infinite;
+    }
+
+    @keyframes shimmer {
+        0% {
+            transform: translateX(-100%);
+        }
+        100% {
+            transform: translateX(100%);
+        }
+    }
+
+    .stat-note {
+        text-align: center;
+        color: rgba(255, 255, 255, 0.7);
+        font-size: 0.9rem;
+        margin-top: 1rem;
+        font-style: italic;
     }
 
     .controls {
@@ -726,13 +946,12 @@
 
     th:nth-child(1), td:nth-child(1) { width: 140px; } /* TC ID */
     th:nth-child(2), td:nth-child(2) { width: 250px; } /* Student Name */
-    th:nth-child(3), td:nth-child(3) { width: 140px; } /* Birth Date */
-    th:nth-child(4), td:nth-child(4) { width: 250px; } /* School */
-    th:nth-child(5), td:nth-child(5) { width: 250px; } /* Parent Name */
-    th:nth-child(6), td:nth-child(6) { width: 140px; } /* Phone */
-    th:nth-child(7), td:nth-child(7) { width: 180px; } /* Exam Hall */
-    th:nth-child(8), td:nth-child(8) { width: 120px; } /* Order No */
-    th:nth-child(9), td:nth-child(9) { width: 140px; } /* Actions */
+    th:nth-child(3), td:nth-child(3) { width: 250px; } /* School */
+    th:nth-child(4), td:nth-child(4) { width: 250px; } /* Parent Name */
+    th:nth-child(5), td:nth-child(5) { width: 140px; } /* Phone */
+    th:nth-child(6), td:nth-child(6) { width: 180px; } /* Exam Hall */
+    th:nth-child(7), td:nth-child(7) { width: 120px; } /* Order No */
+    th:nth-child(8), td:nth-child(8) { width: 140px; } /* Actions */
 
     th {
         background: #f7fafc;
@@ -1082,6 +1301,40 @@
             font-size: 1.5rem;
             margin-bottom: 1.5rem;
         }
+
+        .stats-card {
+            padding: 1.5rem;
+        }
+
+        .stat-content {
+            grid-template-columns: 1fr;
+            gap: 1rem;
+        }
+
+        .stat-row {
+            padding: 1rem;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+        }
+
+        .stat-label {
+            font-size: 1rem;
+        }
+
+        .capacity-stats {
+            padding: 1rem;
+        }
+
+        .capacity-text {
+            font-size: 1rem;
+        }
+
+        .percentage {
+            font-size: 1.1rem;
+            padding: 0.4rem 0.8rem;
+        }
     }
 
     .action-buttons {
@@ -1136,5 +1389,79 @@
         background: linear-gradient(to right, #047857, #065f46);
         transform: translateY(-1px);
         box-shadow: 0 4px 12px rgba(5, 150, 105, 0.2);
+    }
+
+    .delete-confirmation-modal {
+        max-width: 450px;
+        text-align: center;
+    }
+
+    .delete-icon {
+        width: 80px;
+        height: 80px;
+        margin: 0 auto 1.5rem;
+        background: #FEF2F2;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 4px solid #FEE2E2;
+    }
+
+    .delete-icon span {
+        color: #DC2626;
+        font-size: 3rem;
+        font-weight: bold;
+        line-height: 1;
+    }
+
+    .delete-message {
+        color: #1F2937;
+        font-size: 1.1rem;
+        margin-bottom: 1rem;
+        line-height: 1.5;
+    }
+
+    .delete-message strong {
+        color: #DC2626;
+    }
+
+    .delete-warning {
+        color: #DC2626;
+        font-size: 0.9rem;
+        font-weight: 600;
+        margin-bottom: 2rem;
+    }
+
+    .confirm-delete-btn {
+        padding: 0.75rem 2rem;
+        background: linear-gradient(to right, #DC2626, #B91C1C);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+
+    .confirm-delete-btn:hover {
+        background: linear-gradient(to right, #B91C1C, #991B1B);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(220, 38, 38, 0.2);
+    }
+
+    @keyframes modalFadeIn {
+        from {
+            opacity: 0;
+            transform: translateY(-20px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    .delete-confirmation-modal {
+        animation: modalFadeIn 0.3s ease-out;
     }
 </style> 

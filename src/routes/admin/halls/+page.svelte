@@ -23,6 +23,8 @@
     let isCreateModalOpen = false;
     let isEditModalOpen = false;
     let selectedHall: ExamHall | null = null;
+    let isDeleteModalOpen = false;
+    let hallToDelete: ExamHall | null = null;
 
     let formData = {
         name: '',
@@ -199,19 +201,25 @@
     }
 
     async function handleDelete(hall: ExamHall) {
-        if (!confirm('Bu sınav salonunu silmek istediğinizden emin misiniz?')) {
-            return;
-        }
+        hallToDelete = hall;
+        isDeleteModalOpen = true;
+    }
+
+    async function confirmDelete() {
+        if (!hallToDelete) return;
 
         try {
-            await deleteDoc(doc(db, "schools", hall.schoolId, "examHalls", hall.id));
+            await deleteDoc(doc(db, "schools", hallToDelete.schoolId, "examHalls", hallToDelete.id));
 
             // Update local state
-            examHalls = examHalls.filter(h => h.id !== hall.id);
+            examHalls = examHalls.filter(h => h.id !== hallToDelete!.id);
             showNotification('Sınav salonu başarıyla silindi.', 'success');
         } catch (error) {
             console.error("Error deleting exam hall: ", error);
             showNotification('Sınav salonu silinirken bir hata oluştu.', 'error');
+        } finally {
+            isDeleteModalOpen = false;
+            hallToDelete = null;
         }
     }
 
@@ -318,10 +326,9 @@
                 doc.setTextColor(0, 0, 0);
                 
                 const columns = [
-                    { header: 'Sıra No', x: 25, width: 20 },
-                    { header: 'T.C. Kimlik No', x: 45, width: 35 },
-                    { header: 'Ad Soyad', x: 80, width: 50 },
-                    { header: 'Doğum Tarihi', x: 130, width: 80 }
+                    { header: 'Sıra', x: 30 },
+                    { header: 'TC No', x: 50 },
+                    { header: 'Ad Soyad', x: 90 },
                 ];
                 
                 // Draw table header
@@ -362,7 +369,6 @@
                         doc.text(student.orderNumber.toString(), columns[0].x, y);
                         doc.text(student.tcId, columns[1].x, y);
                         doc.text(student.studentFullName, columns[2].x, y);
-                        doc.text(student.birthDate, columns[3].x, y);
                         
                         y += 7;
                     });
@@ -530,6 +536,50 @@
                 </form>
             </div>
         </section>
+    </div>
+{/if}
+
+{#if isDeleteModalOpen && hallToDelete}
+    <div 
+        class="modal-overlay" 
+        on:click={() => {
+            isDeleteModalOpen = false;
+            hallToDelete = null;
+        }}
+        on:keydown={(e) => e.key === 'Escape' && (isDeleteModalOpen = false)}
+        role="button"
+        tabindex="0"
+    >
+        <div 
+            class="modal delete-confirmation-modal" 
+            on:click|stopPropagation
+            on:keydown|stopPropagation
+            role="presentation"
+        >
+            <div class="delete-icon">
+                <span>!</span>
+            </div>
+            <h2>Salon Silme Onayı</h2>
+            <p class="delete-message">
+                <strong>{hallToDelete.name}</strong> salonunu silmek istediğinizden emin misiniz?
+            </p>
+            <p class="delete-warning">Bu işlem geri alınamaz ve salondaki tüm öğrenci atamaları kaldırılacaktır!</p>
+            <div class="modal-actions">
+                <button 
+                    type="button" 
+                    class="cancel-btn" 
+                    on:click={() => {
+                        isDeleteModalOpen = false;
+                        hallToDelete = null;
+                    }}
+                >
+                    İptal
+                </button>
+                <button type="button" class="confirm-delete-btn" on:click={confirmDelete}>
+                    Sil
+                </button>
+            </div>
+        </div>
     </div>
 {/if}
 
@@ -964,5 +1014,79 @@
             font-size: 1.5rem;
             margin-bottom: 1.5rem;
         }
+    }
+
+    .delete-confirmation-modal {
+        max-width: 450px;
+        text-align: center;
+    }
+
+    .delete-icon {
+        width: 80px;
+        height: 80px;
+        margin: 0 auto 1.5rem;
+        background: #FEF2F2;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 4px solid #FEE2E2;
+    }
+
+    .delete-icon span {
+        color: #DC2626;
+        font-size: 3rem;
+        font-weight: bold;
+        line-height: 1;
+    }
+
+    .delete-message {
+        color: #1F2937;
+        font-size: 1.1rem;
+        margin-bottom: 1rem;
+        line-height: 1.5;
+    }
+
+    .delete-message strong {
+        color: #DC2626;
+    }
+
+    .delete-warning {
+        color: #DC2626;
+        font-size: 0.9rem;
+        font-weight: 600;
+        margin-bottom: 2rem;
+    }
+
+    .confirm-delete-btn {
+        padding: 0.75rem 2rem;
+        background: linear-gradient(to right, #DC2626, #B91C1C);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+
+    .confirm-delete-btn:hover {
+        background: linear-gradient(to right, #B91C1C, #991B1B);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(220, 38, 38, 0.2);
+    }
+
+    @keyframes modalFadeIn {
+        from {
+            opacity: 0;
+            transform: translateY(-20px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    .delete-confirmation-modal {
+        animation: modalFadeIn 0.3s ease-out;
     }
 </style> 

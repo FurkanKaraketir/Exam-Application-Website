@@ -17,7 +17,6 @@
     let examData: {
         tcId: string;
         studentFullName: string;
-        birthDate: string;
         studentSchoolName: string;
         parentFullName: string;
         phoneNumber: string;
@@ -108,7 +107,6 @@
                 examData = {
                     tcId: data.tcId,
                     studentFullName: data.studentFullName,
-                    birthDate: data.birthDate,
                     studentSchoolName: data.studentSchoolName,
                     parentFullName: data.parentFullName,
                     phoneNumber: data.phoneNumber,
@@ -154,27 +152,26 @@
         doc.setDrawColor(0, 51, 102); // Navy blue color for borders
         doc.setLineWidth(0.5);
         doc.rect(10, 10, 190, 277); // Outer border
-        doc.rect(15, 15, 180, 30); // Header border
+        doc.rect(15, 15, 180, 20); // Header border - reduced height from 30 to 20
         
         // Add header text
-        doc.setFontSize(22);
+        doc.setFontSize(16); // Reduced from 22 to 16
         doc.setFont("DejaVuSans", "bold");
         doc.setTextColor(0, 51, 102); // Navy blue color for main title
-        doc.text("SINAV GİRİŞ BELGESİ", 105, 32, { align: "center" });
+        doc.text("SINAV GİRİŞ BELGESİ", 105, 28, { align: "center" }); // Adjusted Y position from 32 to 28
     
-        
         // Reset text color to black for content
         doc.setTextColor(0, 0, 0);
         
         // Add student information section
-        doc.setFontSize(16);
+        doc.setFontSize(14); // Reduced from 16 to 14
         doc.setFont("DejaVuSans", "bold");
         doc.setTextColor(0, 51, 102); // Navy blue for section headers
-        doc.text("ÖĞRENCİ BİLGİLERİ", 25, 60);
+        doc.text("ÖĞRENCİ BİLGİLERİ", 25, 50); // Adjusted Y position from 60 to 50
         
         // Add horizontal line under section header
         doc.setDrawColor(0, 51, 102);
-        doc.line(25, 63, 185, 63);
+        doc.line(25, 53, 185, 53); // Adjusted Y position from 63 to 53
         
         // Reset text color to black for content
         doc.setTextColor(0, 0, 0);
@@ -183,30 +180,34 @@
         const studentInfo = [
             ["T.C. Kimlik No", ":", examData.tcId],
             ["Ad Soyad", ":", examData.studentFullName],
-            ["Doğum Tarihi", ":", examData.birthDate],
             ["Okul", ":", examData.studentSchoolName],
             ["Veli Adı Soyadı", ":", examData.parentFullName],
             ["Telefon Numarası", ":", examData.phoneNumber]
         ];
         
-        let y = 75;
+        let y = 65; // Adjusted from 75 to 65
         studentInfo.forEach(([label, separator, value]) => {
             doc.setFont("DejaVuSans", "bold");
             doc.text(label, 25, y);
             doc.text(separator, 70, y);
             doc.setFont("DejaVuSans", "normal");
-            doc.text(value, 75, y);
-            y += 12;
+            // Handle long text by splitting into multiple lines if needed
+            const maxWidth = 110; // Maximum width for the value text
+            const lines = doc.splitTextToSize(value, maxWidth);
+            lines.forEach((line: string, index: number) => {
+                doc.text(line, 75, y + (index * 6));
+            });
+            y += 12 + (lines.length - 1) * 6; // Adjust spacing based on number of lines
         });
         
         // Add exam location section
-        doc.setFontSize(16);
+        doc.setFontSize(14); // Reduced from 16 to 14
         doc.setFont("DejaVuSans", "bold");
         doc.setTextColor(0, 51, 102); // Navy blue for section headers
-        doc.text("SINAV YERİ BİLGİLERİ", 25, y + 15);
+        doc.text("SINAV YERİ BİLGİLERİ", 25, y + 5);
         
         // Add horizontal line under section header
-        doc.line(25, y + 18, 185, y + 18);
+        doc.line(25, y + 8, 185, y + 8);
         
         // Reset text color to black for content
         doc.setTextColor(0, 0, 0);
@@ -219,14 +220,19 @@
             ["Sıra No", ":", examData.orderNumber.toString()]
         ];
         
-        y += 30;
+        y += 15;
         examInfo.forEach(([label, separator, value]) => {
             doc.setFont("DejaVuSans", "bold");
             doc.text(label, 25, y);
             doc.text(separator, 70, y);
             doc.setFont("DejaVuSans", "normal");
-            doc.text(value, 75, y);
-            y += 12;
+            // Handle long text by splitting into multiple lines if needed
+            const maxWidth = 110; // Maximum width for the value text
+            const lines = doc.splitTextToSize(value, maxWidth);
+            lines.forEach((line: string, index: number) => {
+                doc.text(line, 75, y + (index * 6));
+            });
+            y += 12 + (lines.length - 1) * 6; // Adjust spacing based on number of lines
         });
         
         // Add important notes section
@@ -253,12 +259,13 @@
             });
         });
         
+        const qr_location = 160;
         // Add QR code for school location
-        doc.addImage(`/${examData.schoolId}.png`, 'PNG', 160, 175, 30, 30);
+        doc.addImage(`/${examData.schoolId}.png`, 'PNG', 155, qr_location, 30, 30);
         doc.setFontSize(10);
         doc.setFont("DejaVuSans", "bold");
         doc.setTextColor(0, 51, 102);
-        doc.text('Okul Konumu', 175, 210, { align: 'center' });
+        doc.text('Okul Konumu', 170, qr_location + 35, { align: 'center' });
         
         // Add footer to all pages
         const pageCount = doc.internal.pages.length - 1;
