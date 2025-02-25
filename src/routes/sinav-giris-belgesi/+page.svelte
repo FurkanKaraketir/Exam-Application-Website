@@ -157,7 +157,14 @@
         doc.setFontSize(16); // Reduced from 22 to 16
         doc.setFont("DejaVuSans", "bold");
         doc.setTextColor(0, 51, 102); // Navy blue color for main title
-        doc.text("SINAV GİRİŞ BELGESİ", 105, 28, { align: "center" }); // Adjusted Y position from 32 to 28
+        doc.text("SINAV GİRİŞ BELGESİ", 105, 27, { align: "center" }); // Adjusted Y position from 32 to 28
+
+        // Add school logo
+        const logoPath = `/favicon.png`;
+        if (logoPath) {
+            doc.addImage(logoPath, 'PNG', 17, 17, 15, 15);
+            doc.addImage(logoPath, 'PNG', 178, 17, 15, 15);
+        }
     
         // Reset text color to black for content
         doc.setTextColor(0, 0, 0);
