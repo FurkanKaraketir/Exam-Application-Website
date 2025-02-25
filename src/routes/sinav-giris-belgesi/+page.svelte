@@ -3,6 +3,7 @@
     import { doc, getDoc } from 'firebase/firestore';
     import { fade, fly } from 'svelte/transition';
     import { jsPDF } from 'jspdf';
+    import { onMount } from 'svelte';
     
     let formData = {
         tcId: ''
@@ -13,9 +14,23 @@
     };
     
     let notificationId = 0;
-    let examData: any = null;
+    let examData: {
+        tcId: string;
+        studentFullName: string;
+        birthDate: string;
+        studentSchoolName: string;
+        parentFullName: string;
+        phoneNumber: string;
+        schoolName: string;
+        hallName: string;
+        orderNumber: number;
+        schoolId: string;
+    } | null = null;
     let loading = false;
-    
+    let isCustomSchool = false;
+    let customSchoolName = '';
+    let notes: string[] = [];
+
     function validateTCID(tcId: string): boolean {
         // Basic format checks
         if (tcId.length !== 11) return false;
@@ -84,26 +99,36 @@
         examData = null;
 
         try {
-            // Get application data
-            const docRef = doc(db, "examApplications", formData.tcId);
-            const docSnap = await getDoc(docRef);
+            // Get exam data from Firebase document
+            const examDocRef = doc(db, "examApplications", formData.tcId);
+            const examDocSnap = await getDoc(examDocRef);
             
-            if (!docSnap.exists()) {
+            if (examDocSnap.exists()) {
+                const data = examDocSnap.data();
+                examData = {
+                    tcId: data.tcId,
+                    studentFullName: data.studentFullName,
+                    birthDate: data.birthDate,
+                    studentSchoolName: data.studentSchoolName,
+                    parentFullName: data.parentFullName,
+                    phoneNumber: data.phoneNumber,
+                    schoolName: data.schoolName,
+                    hallName: data.hallName,
+                    orderNumber: data.orderNumber,
+                    schoolId: data.schoolId
+                };
+            } else {
                 showNotification('Bu TC Kimlik numarası ile başvuru bulunamadı.', 'error');
                 loading = false;
                 return;
             }
 
-            const data = docSnap.data();
-
             // Get exam hall data
-            if (!data.schoolName || !data.hallName) {
+            if (!examData.schoolName || !examData.hallName) {
                 showNotification('Sınav yeri atamanız henüz yapılmamış.', 'warning');
                 loading = false;
                 return;
             }
-
-            examData = data;
         } catch (error) {
             console.error("Error fetching application: ", error);
             showNotification('Bilgiler alınırken bir hata oluştu. Lütfen tekrar deneyiniz.', 'error');
@@ -208,26 +233,20 @@
         doc.setFontSize(16);
         doc.setFont("DejaVuSans", "bold");
         doc.setTextColor(0, 51, 102); // Navy blue for section headers
-        doc.text("ÖNEMLİ NOTLAR", 25, y + 15);
+        doc.text("ÖNEMLİ NOTLAR", 25, y + 10);
         
         // Add horizontal line under section header
-        doc.line(25, y + 18, 185, y + 18);
+        doc.line(25, y + 13, 185, y + 13);
         
         // Reset text color to black for content
         doc.setTextColor(0, 0, 0);
         
         doc.setFontSize(10);
         doc.setFont("DejaVuSans", "normal");
-        const notes = [
-            "• Sınava gelirken bu belgeyi ve kimlik kartınızı yanınızda getirmeyi unutmayınız.",
-            "• Sınavdan en az 30 dakika önce sınav yerinde hazır bulununuz.",
-            "• Cep telefonu, akıllı saat vb. elektronik cihazlar sınav salonuna alınmayacaktır.",
-            "• Sınav süresi boyunca sınav görevlilerinin tüm uyarılarına uyunuz."
-        ];
         
-        y += 30;
+        y += 20;
         notes.forEach(note => {
-            const lines = doc.splitTextToSize(note, 160);
+            const lines = doc.splitTextToSize(`• ${note}`, 160);
             lines.forEach((line: string) => {
                 doc.text(line, 25, y);
                 y += 7;
@@ -247,6 +266,56 @@
         // Save the PDF
         doc.save(`sinav_giris_belgesi_${examData.tcId}.pdf`);
     }
+
+    async function loadNotes() {
+        try {
+            const notesRef = doc(db, "general", "notes");
+            const notesSnap = await getDoc(notesRef);
+            
+            if (notesSnap.exists()) {
+                const data = notesSnap.data();
+                notes = data.info || [];
+            }
+        } catch (error) {
+            console.error("Error loading notes:", error);
+        }
+    }
+
+    async function loadSchools() {
+        try {
+            const response = await fetch('/schools.txt');
+            const text = await response.text();
+            schools = text.split('\n')
+                .map(line => line.trim())
+                .filter(line => line.length > 0)
+                .sort();
+        } catch (error) {
+            console.error('Error loading schools:', error);
+            showNotification('Okul listesi yüklenirken bir hata oluştu.', 'error');
+        }
+    }
+
+    function toTurkishUpperCase(str: string): string {
+        return str.replace('i', 'İ')
+                 .replace('ı', 'I')
+                 .replace('ğ', 'Ğ')
+                 .replace('ü', 'Ü')
+                 .replace('ş', 'Ş')
+                 .replace('ö', 'Ö')
+                 .replace('ç', 'Ç')
+                 .toUpperCase();
+    }
+
+    let schools: string[] = [];
+    let examEntryButton: HTMLAnchorElement;
+    let downloadButton: HTMLButtonElement;
+
+    onMount(async () => {
+        await Promise.all([
+            loadSchools(),
+            loadNotes()
+        ]);
+    });
 </script>
 
 <div class="notifications">

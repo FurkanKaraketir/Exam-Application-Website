@@ -339,6 +339,9 @@
         <a href="/admin/halls" class="halls-btn">
             Sınav Salonları
         </a>
+        <a href="/admin/notes" class="notes-btn">
+            Sınav Notları
+        </a>
         <button on:click={loadApplications} class="refresh-btn">
             Yenile
         </button>
@@ -659,6 +662,25 @@
         background: linear-gradient(to right, #2f855a, #276749);
         transform: translateY(-1px);
         box-shadow: 0 4px 12px rgba(56, 161, 105, 0.2);
+    }
+
+    .notes-btn {
+        padding: 0.75rem 1.5rem;
+        background: linear-gradient(to right, #805ad5, #6b46c1);
+        color: white;
+        text-decoration: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-weight: 600;
+        transition: all 0.3s ease;
+        display: inline-flex;
+        align-items: center;
+    }
+
+    .notes-btn:hover {
+        background: linear-gradient(to right, #6b46c1, #553c9a);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(107, 70, 193, 0.2);
     }
 
     .refresh-btn {

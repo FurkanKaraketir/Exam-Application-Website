@@ -30,10 +30,12 @@
         schoolName: string;
         hallName: string;
         orderNumber: number;
+        schoolId: string;
     } | null = null;
 
     let isCustomSchool = false;
     let customSchoolName = '';
+    let notes: string[] = [];
 
     function toTurkishUpperCase(str: string): string {
         return str.replace('i', 'İ')
@@ -58,6 +60,7 @@
 
     onMount(async () => {
         await loadSchools();
+        await loadNotes();
     });
 
     async function loadSchools() {
@@ -71,6 +74,20 @@
         } catch (error) {
             console.error('Error loading schools:', error);
             showNotification('Okul listesi yüklenirken bir hata oluştu.', 'error');
+        }
+    }
+
+    async function loadNotes() {
+        try {
+            const notesRef = doc(db, "general", "notes");
+            const notesSnap = await getDoc(notesRef);
+            
+            if (notesSnap.exists()) {
+                const data = notesSnap.data();
+                notes = data.info || [];
+            }
+        } catch (error) {
+            console.error("Error loading notes:", error);
         }
     }
 
@@ -383,6 +400,7 @@
                     schoolName: string;
                     hallName: string;
                     orderNumber: number;
+                    schoolId: string;
                 };
                 
                 // Wait for the next tick to ensure the button is rendered
@@ -515,21 +533,22 @@
         
         doc.setFontSize(10);
         doc.setFont("DejaVuSans", "normal");
-        const notes = [
-            "• Sınava gelirken bu belgeyi ve kimlik kartınızı yanınızda getirmeyi unutmayınız.",
-            "• Sınavdan en az 30 dakika önce sınav yerinde hazır bulununuz.",
-            "• Cep telefonu, akıllı saat vb. elektronik cihazlar sınav salonuna alınmayacaktır.",
-            "• Sınav süresi boyunca sınav görevlilerinin tüm uyarılarına uyunuz."
-        ];
         
         y += 30;
         notes.forEach(note => {
-            const lines = doc.splitTextToSize(note, 160);
+            const lines = doc.splitTextToSize(`• ${note}`, 160);
             lines.forEach((line: string) => {
                 doc.text(line, 25, y);
                 y += 7;
             });
         });
+        
+        // Add QR code for school location
+        doc.addImage(`/${examData.schoolId}.png`, 'PNG', 160, 175, 30, 30);
+        doc.setFontSize(10);
+        doc.setFont("DejaVuSans", "bold");
+        doc.setTextColor(0, 51, 102);
+        doc.text('Okul Konumu', 175, 210, { align: 'center' });
         
         // Save the PDF
         doc.save(`sinav_giris_belgesi_${examData.tcId}.pdf`);
