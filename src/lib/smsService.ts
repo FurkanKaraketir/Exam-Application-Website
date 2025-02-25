@@ -19,7 +19,6 @@ export async function sendSMS(phoneNumber: string, message: string) {
         const result = await response.text();
         return { success: true, result };
     } catch (error) {
-        console.error('SMS sending failed:', error);
         return { success: false, error };
     }
 } 

@@ -68,7 +68,6 @@
             }));
             showNotification('Okullar başarıyla yüklendi.', 'success');
         } catch (error) {
-            console.error("Error loading schools: ", error);
             showNotification('Okullar yüklenirken bir hata oluştu.', 'error');
         }
     }
@@ -110,7 +109,6 @@
             });
             showNotification('Sınav salonları başarıyla yüklendi.', 'success');
         } catch (error) {
-            console.error("Error loading exam halls: ", error);
             showNotification('Sınav salonları yüklenirken bir hata oluştu.', 'error');
         }
     }
@@ -169,7 +167,6 @@
             showNotification('Sınav salonu başarıyla oluşturuldu.', 'success');
             closeModals();
         } catch (error) {
-            console.error("Error creating exam hall: ", error);
             showNotification('Sınav salonu oluşturulurken bir hata oluştu.', 'error');
         }
     }
@@ -195,7 +192,6 @@
             showNotification('Sınav salonu başarıyla güncellendi.', 'success');
             closeModals();
         } catch (error) {
-            console.error("Error updating exam hall: ", error);
             showNotification('Sınav salonu güncellenirken bir hata oluştu.', 'error');
         }
     }
@@ -215,7 +211,6 @@
             examHalls = examHalls.filter(h => h.id !== hallToDelete!.id);
             showNotification('Sınav salonu başarıyla silindi.', 'success');
         } catch (error) {
-            console.error("Error deleting exam hall: ", error);
             showNotification('Sınav salonu silinirken bir hata oluştu.', 'error');
         } finally {
             isDeleteModalOpen = false;
@@ -391,7 +386,6 @@
 
             showNotification('Salon listeleri başarıyla oluşturuldu.', 'success');
         } catch (error) {
-            console.error('Error generating hall lists:', error);
             showNotification('Salon listeleri oluşturulurken bir hata oluştu.', 'error');
         }
     }

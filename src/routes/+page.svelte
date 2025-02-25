@@ -70,7 +70,6 @@
                 .filter(line => line.length > 0)
                 .sort();
         } catch (error) {
-            console.error('Error loading schools:', error);
             showNotification('Okul listesi yüklenirken bir hata oluştu.', 'error');
         }
     }
@@ -85,7 +84,6 @@
                 notes = data.info || [];
             }
         } catch (error) {
-            console.error("Error loading notes:", error);
         }
     }
 
@@ -402,7 +400,6 @@
             const smsResult = await sendSMS(formData.phoneNumber, smsMessage);
             
             if (!smsResult.success) {
-                console.error('SMS gönderilemedi:', smsResult.error);
             }
 
             showNotification('Başvurunuz başarıyla gönderildi ve sınav yeriniz atandı!', 'success');
@@ -435,7 +432,6 @@
                     downloadButton?.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 }, 0);
             } else {
-                console.error("Exam data not found in Firebase");
                 showNotification('Sınav bilgileri bulunamadı.', 'error');
             }
 
@@ -448,7 +444,6 @@
                 phoneNumber: '',
             };
         } catch (error) {
-            console.error("Error submitting application: ", error);
             showNotification('Başvuru gönderilirken bir hata oluştu. Lütfen tekrar deneyiniz.', 'error');
         }
     }

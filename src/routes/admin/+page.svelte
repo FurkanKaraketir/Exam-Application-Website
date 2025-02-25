@@ -78,7 +78,6 @@
             totalCapacity = total;
             assignedCount = assigned;
         } catch (error) {
-            console.error("Error loading capacity stats:", error);
         }
     }
 
@@ -96,7 +95,6 @@
             const querySnapshot = await getDocs(schoolsQuery);
             schools = querySnapshot.docs.map(doc => doc.data().name).sort();
         } catch (error) {
-            console.error('Error loading schools:', error);
             showNotification('Okul listesi yüklenirken bir hata oluştu.', 'error');
         }
     }
@@ -122,7 +120,6 @@
             await loadCapacityStats();
             showNotification('Başvurular başarıyla yüklendi.', 'success');
         } catch (error) {
-            console.error("Error loading applications: ", error);
             showNotification('Başvurular yüklenirken bir hata oluştu.', 'error');
         }
     }
@@ -198,7 +195,6 @@
             showNotification('Başvuru başarıyla güncellendi.', 'success');
             closeEditModal();
         } catch (error) {
-            console.error("Error updating application: ", error);
             showNotification('Başvuru güncellenirken bir hata oluştu.', 'error');
         }
     }
@@ -225,7 +221,6 @@
             filterApplications();
             showNotification('Başvuru başarıyla silindi.', 'success');
         } catch (error) {
-            console.error("Error deleting application: ", error);
             showNotification('Başvuru silinirken bir hata oluştu.', 'error');
         } finally {
             isDeleteModalOpen = false;
@@ -254,7 +249,6 @@
             isAddSchoolModalOpen = false;
             await loadSchools();
         } catch (error) {
-            console.error("Error adding school: ", error);
             showNotification('Okul eklenirken bir hata oluştu.', 'error');
         }
     }
@@ -315,7 +309,6 @@
             
             showNotification('Liste Excel formatında indirildi.', 'success');
         } catch (error) {
-            console.error("Error exporting to Excel: ", error);
             showNotification('Liste indirilirken bir hata oluştu.', 'error');
         }
     }

@@ -47,7 +47,6 @@
             }
             showNotification('Notlar başarıyla yüklendi.', 'success');
         } catch (error) {
-            console.error("Error loading notes:", error);
             showNotification('Notlar yüklenirken bir hata oluştu.', 'error');
         } finally {
             loading = false;
@@ -70,7 +69,6 @@
             newNote = '';
             showNotification('Not başarıyla eklendi.', 'success');
         } catch (error) {
-            console.error("Error adding note:", error);
             showNotification('Not eklenirken bir hata oluştu.', 'error');
         }
     }
@@ -86,7 +84,6 @@
             notes = updatedNotes;
             showNotification('Not başarıyla silindi.', 'success');
         } catch (error) {
-            console.error("Error deleting note:", error);
             showNotification('Not silinirken bir hata oluştu.', 'error');
         }
     }
@@ -110,7 +107,6 @@
             notes = updatedNotes;
             showNotification('Not sırası başarıyla değiştirildi.', 'success');
         } catch (error) {
-            console.error("Error moving note:", error);
             showNotification('Not sırası değiştirilirken bir hata oluştu.', 'error');
         }
     }
@@ -133,7 +129,6 @@
             notes = updatedNotes;
             showNotification('Not başarıyla güncellendi.', 'success');
         } catch (error) {
-            console.error("Error updating note:", error);
             showNotification('Not güncellenirken bir hata oluştu.', 'error');
         }
     }

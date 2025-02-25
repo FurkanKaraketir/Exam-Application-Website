@@ -128,7 +128,6 @@
                 return;
             }
         } catch (error) {
-            console.error("Error fetching application: ", error);
             showNotification('Bilgiler alınırken bir hata oluştu. Lütfen tekrar deneyiniz.', 'error');
         }
 
@@ -284,7 +283,6 @@
                 notes = data.info || [];
             }
         } catch (error) {
-            console.error("Error loading notes:", error);
         }
     }
 
@@ -297,7 +295,6 @@
                 .filter(line => line.length > 0)
                 .sort();
         } catch (error) {
-            console.error('Error loading schools:', error);
             showNotification('Okul listesi yüklenirken bir hata oluştu.', 'error');
         }
     }

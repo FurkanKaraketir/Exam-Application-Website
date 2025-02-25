@@ -28,7 +28,6 @@
             await signInWithEmailAndPassword(auth, email, password);
         } catch (e) {
             error = 'Invalid email or password';
-            console.error('Login error:', e);
         }
     }
 </script>
