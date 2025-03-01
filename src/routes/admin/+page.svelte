@@ -33,6 +33,9 @@
     let assignedCount = 0;
     let isDeleteModalOpen = false;
     let applicationToDelete: ExamApplication | null = null;
+    let originators: string[] = [];
+    let error: string | null = null;
+    let loading = true;
 
     type NotificationType = 'success' | 'error' | 'warning';
     type Notification = {

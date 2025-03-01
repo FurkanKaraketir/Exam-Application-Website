@@ -3,7 +3,6 @@
     import { collection, doc, getDoc, setDoc, getDocs, deleteDoc, updateDoc } from 'firebase/firestore';
     import { fade, fly } from 'svelte/transition';
     import { onMount } from 'svelte';
-    import { sendSMS } from '$lib/smsService';
     import { jsPDF } from 'jspdf';
     
     let formData = {
@@ -393,13 +392,6 @@
                 // Delete the application since we couldn't assign a hall
                 await deleteDoc(docRef);
                 return;
-            }
-
-            // Send SMS notification
-            const smsMessage = `Sayın ${formData.studentFullName}, sınav başvurunuz başarıyla alınmıştır. Sınav yeriniz: ${assignedSchool} - ${assignedHall}. Sınav giriş belgenizi web sitemizden alabilirsiniz.`;
-            const smsResult = await sendSMS(formData.phoneNumber, smsMessage);
-            
-            if (!smsResult.success) {
             }
 
             showNotification('Başvurunuz başarıyla gönderildi ve sınav yeriniz atandı!', 'success');
