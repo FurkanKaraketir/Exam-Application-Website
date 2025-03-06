@@ -1,6 +1,6 @@
 <script lang="ts">
     import { db } from '$lib/firebase';
-    import { collection, getDocs, query, orderBy, updateDoc, doc, deleteDoc, type QueryDocumentSnapshot, addDoc, setDoc } from 'firebase/firestore';
+    import { collection, getDocs, query, orderBy, updateDoc, doc, deleteDoc, type QueryDocumentSnapshot, addDoc, setDoc, getDoc } from 'firebase/firestore';
     import { onMount } from 'svelte';
     import * as XLSX from 'xlsx';
 
@@ -18,6 +18,34 @@
         orderNumber?: number;
     }
 
+    interface School {
+        id: string;
+        name: string;
+    }
+
+    interface ExamHall {
+        id: string;
+        name: string;
+        capacity: number;
+        schoolId: string;
+        schoolName: string;
+    }
+
+    interface HallStudent {
+        id: string;
+        tcId: string;
+        studentFullName: string;
+        schoolId: string;
+        schoolName: string;
+        studentSchoolName: string;
+        parentFullName: string;
+        phoneNumber: string;
+        hallName: string;
+        hallId: string;
+        assignedAt: Date;
+        orderNumber: number;
+    }
+
     let applications: ExamApplication[] = [];
     let filteredApplications: ExamApplication[] = [];
     let searchTerm = '';
@@ -26,7 +54,8 @@
     let selectedApplication: ExamApplication | null = null;
     let isEditModalOpen = false;
     let editFormData: Partial<ExamApplication> = {};
-    let schools: string[] = [];
+    let schools: School[] = [];
+    let availableHalls: ExamHall[] = [];
     let isAddSchoolModalOpen = false;
     let newSchoolName = '';
     let totalCapacity = 0;
@@ -94,13 +123,98 @@
 
     async function loadSchools() {
         try {
-            const schoolsQuery = query(collection(db, "schools"), orderBy("name"));
-            const querySnapshot = await getDocs(schoolsQuery);
-            schools = querySnapshot.docs.map(doc => doc.data().name).sort();
+            const schoolsQuery = query(collection(db, "schools"));
+            const schoolsSnapshot = await getDocs(schoolsQuery);
+            schools = schoolsSnapshot.docs.map(doc => ({
+                id: doc.id,
+                name: doc.data().name
+            }));
+            showNotification('Okullar başarıyla yüklendi.', 'success');
         } catch (error) {
-            showNotification('Okul listesi yüklenirken bir hata oluştu.', 'error');
+            showNotification('Okullar yüklenirken bir hata oluştu.', 'error');
         }
     }
+
+    async function loadHallsForSchool(schoolId: string) {
+        try {
+            const hallsQuery = query(collection(db, "schools", schoolId, "examHalls"));
+            const hallsSnapshot = await getDocs(hallsQuery);
+            availableHalls = hallsSnapshot.docs.map(doc => ({
+                id: doc.id,
+                name: doc.data().name,
+                capacity: doc.data().capacity,
+                schoolId: schoolId,
+                schoolName: schools.find(s => s.id === schoolId)?.name || ''
+            }));
+        } catch (error) {
+            showNotification('Sınav salonları yüklenirken bir hata oluştu.', 'error');
+            availableHalls = [];
+        }
+    }
+
+    async function checkOrderNumbers() {
+        try {
+            // get all schools
+            const schoolsQuery = query(collection(db, "schools"));
+            const schoolsSnapshot = await getDocs(schoolsQuery);
+            let studentCount = 0;
+            for (const schoolDoc of schoolsSnapshot.docs) {
+                const hallsQuery = query(collection(db, "schools", schoolDoc.id, "examHalls"));
+                const hallsSnapshot = await getDocs(hallsQuery);
+
+                for (const hallDoc of hallsSnapshot.docs) {
+                    let currentOrderNumber = 0;
+                    //order them by date    
+                    const studentsQuery = query(collection(db, "schools", schoolDoc.id, "examHalls", hallDoc.id, "students"), orderBy("assignedAt", "asc"));
+                    const studentsSnapshot = await getDocs(studentsQuery);
+
+                    for (const studentDoc of studentsSnapshot.docs) {
+                        const studentData = studentDoc.data();
+                        const orderNumber = studentData.orderNumber;
+                        const hallId = studentData.hallId;
+                        const schoolId = studentData.schoolId;
+                        currentOrderNumber++; // Increment first
+
+                        if (orderNumber !== currentOrderNumber) {
+                            // update the order number
+                            await updateDoc(doc(db, "schools", schoolId, "examHalls", hallId, "students", studentDoc.id), {
+                                orderNumber: currentOrderNumber
+                            });
+                            showNotification(`Sıra numarası güncellendi: ${studentData.studentFullName} (${orderNumber} -> ${currentOrderNumber})`, 'success');
+                        }
+
+                        //get the application
+                        const applicationRef = doc(db, "examApplications", studentDoc.id);
+                        const applicationDoc = await getDoc(applicationRef);
+
+                        if (applicationDoc.exists()) {
+                            const applicationData = applicationDoc.data();
+                            const orderNumber = applicationData.orderNumber;
+                            if (orderNumber !== currentOrderNumber) {
+                                // update the order number
+                                await updateDoc(applicationRef, {
+                                    orderNumber: currentOrderNumber
+                                });
+                                showNotification(`Sıra numarası güncellendi: ${studentData.studentFullName} (${orderNumber} -> ${currentOrderNumber})`, 'success');
+                            }
+                        }
+
+                        studentCount++;
+                        showNotification(`${studentCount} öğrenci için sıra numarası kontrol edildi.`, 'success');
+                    }
+                    
+                    
+                }
+                
+            }
+
+            showNotification('Sıra numaraları kontrol edildi ve güncellendi.', 'success');
+        } catch (error) {
+            showNotification('Sıra numaraları kontrol edilirken bir hata oluştu.', 'error');
+            console.error(error);
+        }
+    }
+
 
     async function loadApplications() {
         try {
@@ -168,6 +282,9 @@
     function openEditModal(application: ExamApplication) {
         selectedApplication = application;
         editFormData = { ...application };
+        if (application.schoolId) {
+            loadHallsForSchool(application.schoolId);
+        }
         isEditModalOpen = true;
     }
 
@@ -181,10 +298,89 @@
         if (!selectedApplication) return;
 
         try {
-            const docRef = doc(db, "examApplications", selectedApplication.tcId);
-            await updateDoc(docRef, {
+            // If hall assignment is being removed
+            if (selectedApplication.hallId && selectedApplication.schoolId && (!editFormData.hallId || selectedApplication.hallId !== editFormData.hallId)) {
+                // Remove student from previous hall
+                await deleteDoc(doc(db, "schools", selectedApplication.schoolId, "examHalls", selectedApplication.hallId, "students", selectedApplication.tcId));
+                
+                // Update order numbers for remaining students in the old hall
+                const oldHallStudentsSnapshot = await getDocs(collection(db, "schools", selectedApplication.schoolId, "examHalls", selectedApplication.hallId, "students"));
+                const oldHallStudents = oldHallStudentsSnapshot.docs
+                    .map(doc => ({ id: doc.id, ...doc.data() } as HallStudent))
+                    .sort((a, b) => a.orderNumber - b.orderNumber);
+                
+                // Reorder remaining students
+                for (let i = 0; i < oldHallStudents.length; i++) {
+                    const student = oldHallStudents[i];
+                    if (student.id !== selectedApplication.tcId) {
+                        await updateDoc(doc(db, "schools", selectedApplication.schoolId, "examHalls", selectedApplication.hallId, "students", student.id), {
+                            orderNumber: i + 1
+                        });
+                    }
+                }
+            }
+
+            // If new hall is being assigned
+            if (editFormData.hallId && editFormData.schoolId) {
+                const selectedHall = availableHalls.find(h => h.id === editFormData.hallId);
+                if (selectedHall) {
+                    // Get current students in the new hall
+                    const studentsSnapshot = await getDocs(collection(db, "schools", editFormData.schoolId, "examHalls", editFormData.hallId, "students"));
+                    const currentStudents = studentsSnapshot.docs
+                        .map(doc => ({ id: doc.id, ...doc.data() } as HallStudent))
+                        .sort((a, b) => a.orderNumber - b.orderNumber);
+                    
+                    // Check hall capacity
+                    if (currentStudents.length >= selectedHall.capacity && selectedApplication.hallId !== editFormData.hallId) {
+                        showNotification('Seçilen salon kapasitesi dolu.', 'error');
+                        return;
+                    }
+
+                    // Determine new order number
+                    let newOrderNumber;
+                    if (editFormData.orderNumber && editFormData.orderNumber <= currentStudents.length + 1) {
+                        // If specific order number is requested, shift other students
+                        newOrderNumber = editFormData.orderNumber;
+                        
+                        // Update order numbers for students after the insertion point
+                        for (let i = currentStudents.length - 1; i >= 0; i--) {
+                            const student = currentStudents[i];
+                            if (student.orderNumber >= newOrderNumber && student.id !== selectedApplication.tcId) {
+                                await updateDoc(doc(db, "schools", editFormData.schoolId, "examHalls", editFormData.hallId, "students", student.id), {
+                                    orderNumber: student.orderNumber + 1
+                                });
+                            }
+                        }
+                    } else {
+                        // If no specific order number or invalid order number, append to end
+                        newOrderNumber = currentStudents.length + 1;
+                    }
+
+                    // Add student to new hall
+                    await setDoc(doc(db, "schools", editFormData.schoolId, "examHalls", editFormData.hallId, "students", selectedApplication.tcId), {
+                        tcId: selectedApplication.tcId,
+                        studentFullName: editFormData.studentFullName,
+                        schoolId: editFormData.schoolId,
+                        schoolName: schools.find(s => s.id === editFormData.schoolId)?.name,
+                        studentSchoolName: editFormData.schoolName || selectedApplication.schoolName,
+                        parentFullName: editFormData.parentFullName,
+                        phoneNumber: editFormData.phoneNumber,
+                        hallName: selectedHall.name,
+                        hallId: selectedHall.id,
+                        assignedAt: new Date(),
+                        orderNumber: newOrderNumber
+                    });
+
+                    // Update form data with hall information
+                    editFormData.hallName = selectedHall.name;
+                    editFormData.orderNumber = newOrderNumber;
+                }
+            }
+
+            // Update the application in examApplications collection
+            await updateDoc(doc(db, "examApplications", selectedApplication.tcId), {
                 ...editFormData,
-                lastUpdated: new Date()
+                assignedAt: editFormData.hallId ? new Date() : null
             });
 
             // Update local state
@@ -194,11 +390,46 @@
                     : app
             );
             filterApplications();
-
             showNotification('Başvuru başarıyla güncellendi.', 'success');
             closeEditModal();
         } catch (error) {
             showNotification('Başvuru güncellenirken bir hata oluştu.', 'error');
+        }
+    }
+
+    async function handleSchoolChange(event: Event) {
+        const select = event.target as HTMLSelectElement;
+        const selectedSchoolId = select.value;
+        
+        // Find the selected school
+        const selectedSchool = schools.find(s => s.id === selectedSchoolId);
+        if (selectedSchool) {
+            editFormData.schoolId = selectedSchool.id;
+            editFormData.schoolName = selectedSchool.name;
+            // Reset hall information
+            editFormData.hallId = undefined;
+            editFormData.hallName = undefined;
+            editFormData.orderNumber = undefined;
+            // Load halls for the selected school
+            await loadHallsForSchool(selectedSchool.id);
+        }
+    }
+
+    async function handleHallChange(event: Event) {
+        const select = event.target as HTMLSelectElement;
+        const selectedHallId = select.value;
+        
+        if (!selectedHallId) {
+            editFormData.hallId = undefined;
+            editFormData.hallName = undefined;
+            editFormData.orderNumber = undefined;
+            return;
+        }
+
+        const selectedHall = availableHalls.find(h => h.id === selectedHallId);
+        if (selectedHall) {
+            editFormData.hallId = selectedHall.id;
+            editFormData.hallName = selectedHall.name;
         }
     }
 
@@ -260,10 +491,11 @@
         try {
             // Create worksheet data
             const wsData = [
-                ['T.C. Kimlik No', 'Öğrenci Adı Soyadı', 'Veli Adı Soyadı', 'Telefon','Sınav Binası', 'Sınav Salonu', 'Sıra No', 'Başvuru Tarihi'],
+                ['T.C. Kimlik No', 'Öğrenci Adı Soyadı', 'Öğrencinin Okulu', 'Veli Adı Soyadı', 'Telefon','Sınav Binası', 'Sınav Salonu', 'Sıra No', 'Başvuru Tarihi'],
                 ...filteredApplications.map(app => [
                     app.tcId,
                     app.studentFullName,
+                    app.studentSchoolName || '-',
                     app.parentFullName,
                     app.phoneNumber,
                     app.schoolName,
@@ -280,6 +512,7 @@
             const colWidths = [
                 { wch: 15 },  // TC ID
                 { wch: 30 },  // Student Name
+                { wch: 30 },  // Student School Name
                 { wch: 30 },  // Parent Name
                 { wch: 15 },  // Phone
                 { wch: 35 },  // School
@@ -399,6 +632,9 @@
         </a>
         <button on:click={loadApplications} class="refresh-btn">
             Yenile
+        </button>
+        <button on:click={checkOrderNumbers} class="refresh-btn">
+            Sıra Numaralarını Kontrol Et
         </button>
     </div>
 
@@ -540,15 +776,16 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="schoolName">Okul</label>
+                    <label for="schoolName">Sınav Binası</label>
                     <select
                         id="schoolName"
-                        bind:value={editFormData.schoolName}
+                        bind:value={editFormData.schoolId}
                         required
+                        on:change={handleSchoolChange}
                     >
                         <option value="">Okul seçiniz</option>
                         {#each schools as school}
-                            <option value={school}>{school}</option>
+                            <option value={school.id}>{school.name}</option>
                         {/each}
                     </select>
                 </div>
@@ -576,12 +813,22 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="hallName">Sınav Salonu</label>
-                    <input
-                        type="text"
-                        id="hallName"
-                        bind:value={editFormData.hallName}
-                    />
+                    <label for="hallId">Sınav Salonu</label>
+                    <select
+                        id="hallId"
+                        bind:value={editFormData.hallId}
+                        on:change={handleHallChange}
+                    >
+                        <option value="">Sınav salonu seçiniz</option>
+                        {#each availableHalls as hall}
+                            <option value={hall.id}>{hall.name}</option>
+                        {/each}
+                    </select>
+                    {#if editFormData.hallId}
+                        <small class="helper-text">
+                            Kapasite: {availableHalls.find(h => h.id === editFormData.hallId)?.capacity || 0}
+                        </small>
+                    {/if}
                 </div>
 
                 <div class="form-group">
@@ -591,6 +838,7 @@
                         id="orderNumber"
                         bind:value={editFormData.orderNumber}
                         min="1"
+                        disabled={!editFormData.hallId}
                     />
                 </div>
 
@@ -1063,6 +1311,14 @@
         outline: none;
         border-color: #3182ce;
         box-shadow: 0 0 0 3px rgba(49, 130, 206, 0.1);
+    }
+
+    .helper-text {
+        display: block;
+        color: #718096;
+        font-size: 0.875rem;
+        margin-top: 0.5rem;
+        padding-left: 0.5rem;
     }
 
     .modal-actions {

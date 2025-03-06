@@ -310,13 +310,11 @@
                 doc.setFontSize(16);
                 doc.setFont("DejaVuSans", "bold");
                 doc.setTextColor(0, 51, 82);
-                doc.text("ÖĞRENCİ LİSTESİ", 25, y + 15);
+                doc.text("ÖĞRENCİ LİSTESİ", 25, y + 5);
                 
-                // Add horizontal line under section header
-                doc.line(25, y + 18, 185, y + 18);
                 
                 // Create table header
-                y += 30;
+                y += 14;
                 doc.setFontSize(10);
                 doc.setTextColor(0, 0, 0);
                 

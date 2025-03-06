@@ -4,6 +4,15 @@
     import { fade, fly } from 'svelte/transition';
     import { onMount } from 'svelte';
     import { jsPDF } from 'jspdf';
+    import { goto } from '$app/navigation';
+    
+    // Check if application deadline has passed
+    const deadline = new Date('2025-04-02');
+    const now = new Date();
+    
+    if (now > deadline) {
+        goto('/sinav-giris-belgesi');
+    }
     
     let formData = {
         tcId: '',
@@ -211,6 +220,21 @@
     }
     
     async function handleSubmit() {
+        // Trim and properly capitalize each part of the names
+        formData.studentFullName = formData.studentFullName
+            .trim()
+            .split(' ')
+            .filter(part => part.length > 0)  // Remove empty parts
+            .map(part => toTurkishUpperCase(part))
+            .join(' ');
+        formData.parentFullName = formData.parentFullName
+            .trim()
+            .split(' ')
+            .filter(part => part.length > 0)  // Remove empty parts
+            .map(part => toTurkishUpperCase(part))
+            .join(' ');
+            
+
         // Check submission deadline
         const deadline = new Date('2025-04-02');
         const now = new Date();
