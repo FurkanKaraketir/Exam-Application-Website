@@ -266,7 +266,7 @@
                 doc.setFontSize(18);
                 doc.setFont("DejaVuSans", "bold");
                 doc.setTextColor(0, 51, 102); // Navy blue color for main title
-                doc.text(`${hall.name} SINAV SALONU ÖĞRENCİ LİSTESİ`, 105, 32, { align: "center" });
+                doc.text(`${hall.name} Öğrenci Listesi`, 105, 32, { align: "center" });
                 
                 // Add hall information section
                 doc.setFontSize(16);

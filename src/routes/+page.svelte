@@ -5,14 +5,33 @@
     import { onMount } from 'svelte';
     import { jsPDF } from 'jspdf';
     import { goto } from '$app/navigation';
+    import { browser } from '$app/environment';
     
-    // Check if application deadline has passed
-    const deadline = new Date('2025-04-02');
-    const now = new Date();
-    
-    if (now > deadline) {
-        goto('/sinav-giris-belgesi');
+    // System settings interface
+    interface SystemSettings {
+        applicationDeadline: string;
+        examDate: string;
+        resultsReleaseDate: string;
+        applicationEnabled: boolean;
+        resultsEnabled: boolean;
+        currentYear: number;
+        currentPhase: 'application' | 'exam' | 'results' | 'completed';
+        resultsFileUrl?: string;
+        lastUpdated: Date;
     }
+
+    // Load system settings
+    let systemSettings: SystemSettings | null = null;
+    let isLoadingSettings = true;
+    
+    // Remove hardcoded values and use dynamic settings
+    let applicationDeadline: Date | null = null;
+    let examDate: Date | null = null;
+    let isApplicationEnabled = false;
+    let currentPhase: string = 'application';
+    
+    // Check if capacity is full
+    let isCapacityFull = false;
     
     let formData = {
         tcId: '',
@@ -61,13 +80,88 @@
 
     let schools: string[] = [];
     let notificationId = 0;
-    let examEntryButton: HTMLAnchorElement;
     let downloadButton: HTMLButtonElement;
 
     onMount(async () => {
+        try {
+            // Load system settings first
+            await loadSystemSettings();
+            
+            const schoolsSnapshot = await getDocs(collection(db, "schools"));
+            const schools = schoolsSnapshot.docs;
+            
+            let totalCapacity = 0;
+            let totalStudents = 0;
+            
+            for (const school of schools) {
+                const examHallsSnapshot = await getDocs(collection(db, "schools", school.id, "examHalls"));
+                const examHalls = examHallsSnapshot.docs;
+                
+                for (const hall of examHalls) {
+                    const hallData = hall.data();
+                    totalCapacity += hallData.capacity;
+                    
+                    const studentsSnapshot = await getDocs(collection(db, "schools", school.id, "examHalls", hall.id, "students"));
+                    totalStudents += studentsSnapshot.size;
+                }
+            }
+            
+            
+        } catch (error) {
+            console.error('Error checking capacity:', error);
+        }
+        
         await loadSchools();
         await loadNotes();
     });
+
+    async function loadSystemSettings() {
+        try {
+            isLoadingSettings = true;
+            const settingsRef = doc(db, "system", "settings");
+            const settingsSnap = await getDoc(settingsRef);
+            
+            if (settingsSnap.exists()) {
+                const data = settingsSnap.data();
+                systemSettings = {
+                    applicationDeadline: data.applicationDeadline || '',
+                    examDate: data.examDate || '',
+                    resultsReleaseDate: data.resultsReleaseDate || '',
+                    applicationEnabled: data.applicationEnabled || false,
+                    resultsEnabled: data.resultsEnabled || false,
+                    currentYear: data.currentYear || 2025,
+                    currentPhase: data.currentPhase || 'application',
+                    resultsFileUrl: data.resultsFileUrl || '',
+                    lastUpdated: data.lastUpdated?.toDate() || new Date()
+                };
+                
+                // Update local variables
+                applicationDeadline = systemSettings.applicationDeadline ? new Date(systemSettings.applicationDeadline) : null;
+                examDate = systemSettings.examDate ? new Date(systemSettings.examDate) : null;
+                isApplicationEnabled = systemSettings.applicationEnabled;
+                currentPhase = systemSettings.currentPhase;
+            } else {
+                // Create default settings if they don't exist
+                const defaultSettings = {
+                    applicationDeadline: '',
+                    examDate: '',
+                    resultsReleaseDate: '',
+                    applicationEnabled: false,
+                    resultsEnabled: false,
+                    currentYear: 2025,
+                    currentPhase: 'application',
+                    lastUpdated: new Date()
+                };
+                
+                await setDoc(settingsRef, defaultSettings);
+                systemSettings = defaultSettings as SystemSettings;
+            }
+        } catch (error) {
+            console.error('Error loading system settings:', error);
+        } finally {
+            isLoadingSettings = false;
+        }
+    }
 
     async function loadSchools() {
         try {
@@ -220,6 +314,18 @@
     }
     
     async function handleSubmit() {
+        // Check if system settings are loaded
+        if (isLoadingSettings || !systemSettings) {
+            showNotification('Sistem ayarları yükleniyor, lütfen bekleyiniz.', 'warning');
+            return;
+        }
+
+        // Check if application system is enabled
+        if (!isApplicationEnabled) {
+            showNotification('Başvuru sistemi şu anda kapalıdır.', 'error');
+            return;
+        }
+
         // Trim and properly capitalize each part of the names
         formData.studentFullName = formData.studentFullName
             .trim()
@@ -235,13 +341,13 @@
             .join(' ');
             
 
-        // Check submission deadline
-        const deadline = new Date('2025-04-02');
-        const now = new Date();
-        
-        if (now > deadline) {
-            showNotification('Başvuru dönemi sona ermiştir.', 'error');
-            return;
+        // Check submission deadline using system settings
+        if (applicationDeadline) {
+            const now = new Date();
+            if (now > applicationDeadline) {
+                showNotification('Başvuru dönemi sona ermiştir.', 'error');
+                return;
+            }
         }
 
         if (!validateTCID(formData.tcId)) {
@@ -255,8 +361,6 @@
             
             if (docSnap.exists()) {
                 showNotification('Bu TC Kimlik numarası ile daha önce başvuru yapılmış. Sınav giriş belgenizi alabilirsiniz.', 'warning');
-                examEntryButton?.focus();
-                examEntryButton?.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 return;
             }
 
@@ -443,10 +547,10 @@
                 };
                 
                 // Wait for the next tick to ensure the button is rendered
-                setTimeout(() => {
+               /* setTimeout(() => {
                     downloadButton?.focus();
                     downloadButton?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                }, 0);
+                }, 0);*/
             } else {
                 showNotification('Sınav bilgileri bulunamadı.', 'error');
             }
@@ -645,179 +749,214 @@
 <main class="container">
     <div class="content-wrapper">
         <div class="form-column">
-            <h1>Recep Tayyip Erdoğan Proje İmam Hatip Lisesi <br> 5. Sınıf Kayıt Kabul Sınavı Başvuru Formu</h1>
+            <h1>Recep Tayyip Erdoğan Proje İmam Hatip Lisesi <br> {systemSettings?.currentYear || 2025}. Sınıf Kayıt Kabul Sınavı</h1>
             
-            <div class="deadline-banner">
-                <span class="deadline-icon">⏰</span>
-                <h2>Son Başvuru Tarihi: 1 Nisan 2025</h2>
-                <span class="deadline-icon">⏰</span>
-            </div>
-            
-            <form on:submit|preventDefault={handleSubmit} class="form">
-                <div class="form-group">
-                    <label for="tcId">Öğrenci T.C. Kimlik Numarası</label>
-                    <input
-                        type="text"
-                        id="tcId"
-                        bind:value={formData.tcId}
-                        required
-                        minlength="11"
-                        maxlength="11"
-                        inputmode="numeric"
-                        placeholder="T.C. Kimlik Numaranızı giriniz"
-                        on:input={handleTCKNInput}
-                        class:invalid={legalErrors.tckn !== ''}
-                    />
-                    {#if legalErrors.tckn}
-                        <span class="error-message">{legalErrors.tckn}</span>
+            {#if isLoadingSettings}
+                <div class="loading-banner">
+                    <span class="loading-icon">⏳</span>
+                    <h2>Sistem Bilgileri Yükleniyor...</h2>
+                    <p>Lütfen bekleyiniz.</p>
+                </div>
+            {:else if currentPhase === 'application' && isApplicationEnabled}
+                <!-- Application Form -->
+                <div class="application-banner">
+                    <span class="application-icon">📝</span>
+                    <h2>Başvuru Dönemi Açıktır</h2>
+                    {#if applicationDeadline}
+                        <p>Son başvuru tarihi: {applicationDeadline.toLocaleDateString('tr-TR', { 
+                            year: 'numeric', 
+                            month: 'long', 
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                        })}</p>
                     {/if}
                 </div>
                 
-                <div class="form-group">
-                    <label for="studentFullName">Öğrenci Adı Soyadı</label>
-                    <input
-                        type="text"
-                        id="studentFullName"
-                        bind:value={formData.studentFullName}
-                        on:input={(e) => handleNameInput(e, 'studentFullName')}
-                        required
-                        placeholder="Öğrenci adı soyadı"
-                    />
-                </div>
-
-                <div class="form-group">
-                    <label for="schoolName">Okul Adı</label>
-                    <div class="school-input-container">
-                        <select
-                            id="schoolName"
-                            value={isCustomSchool ? "DİĞER" : formData.schoolName}
+                <!-- Show application form here -->
+                <form class="form" on:submit|preventDefault={handleSubmit}>
+                    <div class="form-group">
+                        <label for="tcId">T.C. Kimlik Numaranız:</label>
+                        <input
+                            type="text"
+                            id="tcId"
+                            bind:value={formData.tcId}
+                            on:input={handleTCKNInput}
+                            placeholder="11 Haneli T.C. Kimlik No"
+                            maxlength="11"
                             required
-                            class="school-select"
-                            class:expanded={isCustomSchool}
-                            on:change={handleSchoolSelect}
-                        >
-                            <option value="">Okul seçiniz</option>
-                            {#each schools as school}
-                                <option value={school}>{school}</option>
-                            {/each}
-                            <option value="DİĞER">DİĞER OKUL</option>
-                        </select>
-                        {#if isCustomSchool}
-                            <div class="custom-school-container" transition:fade>
-                                <input
-                                    type="text"
-                                    id="customSchoolName"
-                                    bind:value={customSchoolName}
-                                    required
-                                    placeholder="Okul adını giriniz"
-                                    class="custom-school-input"
-                                    on:input={handleCustomSchoolInput}
-                                />
-                                <small class="helper-text">Lütfen okulunuzun tam adını giriniz</small>
-                            </div>
+                            aria-invalid={legalErrors.tckn !== ''}
+                            class:invalid={legalErrors.tckn !== ''}
+                        />
+                        {#if legalErrors.tckn}
+                            <span class="error-message">{legalErrors.tckn}</span>
                         {/if}
                     </div>
-                </div>
 
-                <div class="form-group">
-                    <label for="parentFullName">Veli Adı Soyadı</label>
-                    <input
-                        type="text"
-                        id="parentFullName"
-                        bind:value={formData.parentFullName}
-                        required
-                        placeholder="Velinin adını ve soyadını giriniz"
-                        on:input={(e) => handleNameInput(e, 'parentFullName')}
-                    />
-                </div>
+                    <div class="form-group">
+                        <label for="studentFullName">Öğrenci Adı Soyadı:</label>
+                        <input
+                            type="text"
+                            id="studentFullName"
+                            on:input={(e) => handleNameInput(e, 'studentFullName')}
+                            placeholder="Öğrenci Adı Soyadı"
+                            required
+                        />
+                    </div>
 
-                <div class="form-group">
-                    <label for="phoneNumber">İletişim Telefonu</label>
-                    <input
-                        type="text"
-                        id="phoneNumber"
-                        on:input={handlePhoneInput}
-                        required
-                        minlength="10"
-                        maxlength="15"
-                        inputmode="numeric"
-                        placeholder="(5XX) XXX XX XX"
-                        class:invalid={legalErrors.phoneNumber !== ''}
-                    />
-                    {#if legalErrors.phoneNumber}
-                        <span class="error-message">{legalErrors.phoneNumber}</span>
+                    <div class="form-group">
+                        <label for="parentFullName">Veli Adı Soyadı:</label>
+                        <input
+                            type="text"
+                            id="parentFullName"
+                            on:input={(e) => handleNameInput(e, 'parentFullName')}
+                            placeholder="Veli Adı Soyadı"
+                            required
+                        />
+                    </div>
+
+                    <div class="form-group">
+                        <label for="phoneNumber">Cep Telefonu:</label>
+                        <input
+                            type="tel"
+                            id="phoneNumber"
+                            on:input={handlePhoneInput}
+                            placeholder="(5XX) XXX XX XX"
+                            required
+                            aria-invalid={legalErrors.phoneNumber !== ''}
+                            class:invalid={legalErrors.phoneNumber !== ''}
+                        />
+                        {#if legalErrors.phoneNumber}
+                            <span class="error-message">{legalErrors.phoneNumber}</span>
+                        {/if}
+                    </div>
+
+                    <div class="form-group">
+                        <label for="schoolName">Okul Adı:</label>
+                        <div class="school-input-container">
+                            <select 
+                                class="school-select {isCustomSchool ? 'expanded' : ''}" 
+                                on:change={handleSchoolSelect}
+                                required
+                            >
+                                <option value="">Okul seçiniz</option>
+                                {#each schools as school}
+                                    <option value={school}>{school}</option>
+                                {/each}
+                                <option value="DİĞER">DİĞER</option>
+                            </select>
+                            
+                            {#if isCustomSchool}
+                                <div class="custom-school-container">
+                                    <input
+                                        type="text"
+                                        class="custom-school-input"
+                                        placeholder="Okul adını yazınız"
+                                        on:input={handleCustomSchoolInput}
+                                        required
+                                    />
+                                    <small class="helper-text">Okulunuz listede yoksa manuel olarak yazabilirsiniz.</small>
+                                </div>
+                            {/if}
+                        </div>
+                    </div>
+
+                    <button type="submit" class="submit-btn">
+                        Başvurumu Gönder
+                    </button>
+                </form>
+
+                {#if examData}
+                    <div class="exam-info" transition:fade>
+                        <h2>Sınav Giriş Belgesi</h2>
+                        <div class="info-grid">
+                            <div class="info-item">
+                                <span class="label">T.C. Kimlik No:</span>
+                                <span class="value">{examData.tcId}</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="label">Ad Soyad:</span>
+                                <span class="value">{examData.studentFullName}</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="label">Okul:</span>
+                                <span class="value">{examData.studentSchoolName}</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="label">Sınav Yeri:</span>
+                                <span class="value">{examData.schoolName} - {examData.hallName}</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="label">Sıra No:</span>
+                                <span class="value">{examData.orderNumber}</span>
+                            </div>
+                        </div>
+                        
+                        <button 
+                            bind:this={downloadButton}
+                            class="download-btn" 
+                            on:click={downloadExamDocument}
+                        >
+                            📄 Sınav Giriş Belgesini İndir
+                        </button>
+                    </div>
+                {/if}
+                
+            {:else if currentPhase === 'exam'}
+                <div class="exam-banner">
+                    <span class="exam-icon">📊</span>
+                    <h2>Sınav Dönemi</h2>
+                    {#if examDate}
+                        <p>Sınav tarihi: {examDate.toLocaleDateString('tr-TR', { 
+                            year: 'numeric', 
+                            month: 'long', 
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                        })}</p>
                     {/if}
+                    <p>Başvurular tamamlanmıştır. Sınav giriş belgenizi alabilirsiniz.</p>
                 </div>
                 
-                <button type="submit" class="submit-btn">Başvuruyu Gönder</button>
-            </form>
-
-            {#if examData}
-                <div class="exam-info" transition:fade>
-                    <h2>Sınav Bilgileri</h2>
-                    <div class="info-grid">
-                        <div class="info-item">
-                            <span class="label">Ad Soyad:</span>
-                            <span class="value">{examData.studentFullName}</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="label">Okul:</span>
-                            <span class="value">{examData.schoolName}</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="label">Veli Adı Soyadı:</span>
-                            <span class="value">{examData.parentFullName}</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="label">Telefon Numarası:</span>
-                            <span class="value">{examData.phoneNumber}</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="label">Sınav Tarihi:</span>
-                            <span class="value">19.04.2025</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="label">Sınav Binası:</span>
-                            <span class="value">{examData.schoolName}</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="label">Sınav Salonu:</span>
-                            <span class="value">{examData.hallName}</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="label">Sıra No:</span>
-                            <span class="value">{examData.orderNumber.toString()}</span>
-                        </div>
-                    </div>
-                    <div class="qr-section">
-                        <img 
-                            src="/{examData.schoolId}.png" 
-                            alt="Okul Konumu QR Kodu"
-                            class="qr-code"
-                        />
-                        <span class="qr-label">Okul Konumu QR Kodu</span>
-                    </div>
-                    <button 
-                        class="download-btn" 
-                        on:click={downloadExamDocument}
-                        bind:this={downloadButton}
-                    >
-                        <span class="icon">📄</span>
-                        SINAV GİRİŞ BELGESİNİ İNDİR
-                    </button>
+            {:else if currentPhase === 'results'}
+                <div class="results-banner">
+                    <span class="results-icon">📋</span>
+                    <h2>Sonuç Açıklama Dönemi</h2>
+                    <p>Sınav sonuçlarına ulaşmak için aşağıdaki butona tıklayabilirsiniz.</p>
+                </div>
+                
+            {:else if currentPhase === 'completed'}
+                <div class="completed-banner">
+                    <span class="completed-icon">✅</span>
+                    <h2>Sınav Tamamlanmıştır</h2>
+                    <p>Sınav süreci tamamlanmıştır. Sonuçlar açıklanmıştır.</p>
+                </div>
+                
+            {:else}
+                <div class="inactive-banner">
+                    <span class="inactive-icon">⏸️</span>
+                    <h2>Sistem Bakımda</h2>
+                    <p>Başvuru sistemi şu anda kapalıdır. Lütfen daha sonra tekrar deneyiniz.</p>
                 </div>
             {/if}
+           
         </div>
+        
         <div class="action-column">
             <div class="action-buttons">
-                <a href="/sinav-giris-belgesi" class="action-btn" bind:this={examEntryButton}>
-                    <span class="icon">📄</span>
-                    Sınav Giriş Belgesi
-                </a>
-                <button class="action-btn">
-                    <span class="icon">📊</span>
-                    Sınav Sonuçları
-                </button>
+                {#if systemSettings?.resultsEnabled || currentPhase === 'results' || currentPhase === 'completed'}
+                    <a href="/results" class="action-btn primary-action">
+                        <span class="icon">📊</span>
+                        Sınav Sonuçları
+                    </a>
+                {/if}
+                
+                {#if currentPhase !== 'application' || !isApplicationEnabled}
+                    <a href="/sinav-giris-belgesi" class="action-btn">
+                        <span class="icon">📄</span>
+                        Sınav Giriş Belgesi
+                    </a>
+                {/if}
             </div>
         </div>
     </div>
@@ -856,28 +995,6 @@
         display: flex;
         flex-direction: column;
         gap: 0.625rem;
-    }
-    
-    label {
-        font-weight: 600;
-        color: #2d3748;
-        font-size: 0.95rem;
-    }
-    
-    input, select {
-        padding: 0.875rem;
-        border: 2px solid #e2e8f0;
-        border-radius: 8px;
-        font-size: 1rem;
-        transition: all 0.2s ease;
-        background-color: #f8fafc;
-    }
-    
-    input:focus, select:focus {
-        outline: none;
-        border-color: #3182ce;
-        box-shadow: 0 0 0 3px rgba(49, 130, 206, 0.1);
-        background-color: #ffffff;
     }
     
     .submit-btn {
@@ -945,9 +1062,6 @@
         background-color: #fff5f5;
     }
     
-    input:not(:placeholder-shown):invalid {
-        border-color: #e53e3e;
-    }
     
     @media (max-width: 768px) {
         .content-wrapper {
@@ -972,10 +1086,6 @@
             gap: 0.5rem;
         }
 
-        input, select {
-            padding: 0.75rem;
-            font-size: 0.95rem;
-        }
 
         .submit-btn {
             padding: 0.875rem;
@@ -1176,10 +1286,6 @@
         border-bottom-color: transparent;
     }
     
-    .school-select option {
-        padding: 0.5rem;
-        background-color: white;
-    }
 
     .custom-school-container {
         background-color: white;
@@ -1299,40 +1405,153 @@
         transform: translateY(0);
     }
 
-    .deadline-banner {
-        background: linear-gradient(to right, #ebf8ff, #e6fffa);
-        border: 2px solid #3182ce;
+    .capacity-banner {
+        background: linear-gradient(to right, #fff5f5, #faf5ff);
+        border: 2px solid #e53e3e;
         border-radius: 8px;
-        padding: 1rem;
+        padding: 1.5rem;
         margin: 1.5rem 0 2.5rem;
         display: flex;
+        flex-direction: column;
         align-items: center;
         justify-content: center;
         gap: 1rem;
-        animation: pulse 2s infinite;
-    }
-
-    .deadline-banner h2 {
-        color: #2c5282;
-        font-size: 1.5rem;
-        font-weight: 700;
-        margin: 0;
         text-align: center;
     }
 
-    .deadline-icon {
+    .capacity-banner h2 {
+        color: #c53030;
         font-size: 1.5rem;
+        font-weight: 700;
+        margin: 0;
     }
 
-    @keyframes pulse {
-        0% {
-            box-shadow: 0 0 0 0 rgba(49, 130, 206, 0.4);
-        }
-        70% {
-            box-shadow: 0 0 0 10px rgba(49, 130, 206, 0);
-        }
-        100% {
-            box-shadow: 0 0 0 0 rgba(49, 130, 206, 0);
-        }
+    .capacity-banner p {
+        color: #4a5568;
+        font-size: 1.1rem;
+        margin: 0;
+        max-width: 600px;
+    }
+
+    .capacity-icon {
+        font-size: 2rem;
+    }
+
+    .primary-action {
+        background: linear-gradient(to right, #3182ce, #2c5282);
+        color: white !important;
+        border: none;
+    }
+    
+    .primary-action:hover {
+        background: linear-gradient(to right, #2c5282, #2a4365);
+        border: none;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(49, 130, 206, 0.2);
+    }
+
+    /* New banner styles */
+    .loading-banner,
+    .application-banner,
+    .exam-banner,
+    .results-banner,
+    .completed-banner,
+    .inactive-banner {
+        padding: 1.5rem;
+        margin: 1.5rem 0 2.5rem;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1rem;
+        text-align: center;
+        border-radius: 12px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+
+    .loading-banner {
+        background: linear-gradient(to right, #e6f2ff, #f0f7ff);
+        border: 2px solid #4299e1;
+    }
+
+    .application-banner {
+        background: linear-gradient(to right, #f0fff4, #e6fffa);
+        border: 2px solid #48bb78;
+    }
+
+    .exam-banner {
+        background: linear-gradient(to right, #fffbeb, #fef3c7);
+        border: 2px solid #f6ad55;
+    }
+
+    .results-banner {
+        background: linear-gradient(to right, #e6f7ff, #f0f7ff);
+        border: 2px solid #4299e1;
+    }
+
+    .completed-banner {
+        background: linear-gradient(to right, #f0fff4, #e6fffa);
+        border: 2px solid #48bb78;
+    }
+
+    .inactive-banner {
+        background: linear-gradient(to right, #f7fafc, #edf2f7);
+        border: 2px solid #a0aec0;
+    }
+
+    .loading-banner h2,
+    .application-banner h2,
+    .exam-banner h2,
+    .results-banner h2,
+    .completed-banner h2,
+    .inactive-banner h2 {
+        margin: 0;
+        font-size: 1.5rem;
+        font-weight: 700;
+    }
+
+    .loading-banner h2 {
+        color: #2b6cb0;
+    }
+
+    .application-banner h2 {
+        color: #2f855a;
+    }
+
+    .exam-banner h2 {
+        color: #c05621;
+    }
+
+    .results-banner h2 {
+        color: #2b6cb0;
+    }
+
+    .completed-banner h2 {
+        color: #2f855a;
+    }
+
+    .inactive-banner h2 {
+        color: #4a5568;
+    }
+
+    .loading-banner p,
+    .application-banner p,
+    .exam-banner p,
+    .results-banner p,
+    .completed-banner p,
+    .inactive-banner p {
+        color: #4a5568;
+        font-size: 1.1rem;
+        margin: 0;
+        max-width: 600px;
+    }
+
+    .loading-icon,
+    .application-icon,
+    .exam-icon,
+    .results-icon,
+    .completed-icon,
+    .inactive-icon {
+        font-size: 2rem;
     }
 </style>

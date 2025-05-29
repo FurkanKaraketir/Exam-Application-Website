@@ -4,6 +4,24 @@
     import { fade, fly } from 'svelte/transition';
     import { jsPDF } from 'jspdf';
     import { onMount } from 'svelte';
+    import { goto } from '$app/navigation';
+    
+    // System settings interface
+    interface SystemSettings {
+        applicationDeadline: string;
+        examDate: string;
+        resultsReleaseDate: string;
+        applicationEnabled: boolean;
+        resultsEnabled: boolean;
+        currentYear: number;
+        currentPhase: 'application' | 'exam' | 'results' | 'completed';
+        resultsFileUrl?: string;
+        lastUpdated: Date;
+    }
+
+    // Load system settings
+    let systemSettings: SystemSettings | null = null;
+    let isLoadingSettings = true;
     
     let formData = {
         tcId: ''
@@ -127,6 +145,9 @@
                 loading = false;
                 return;
             }
+
+            // Directly navigate to results page
+            // goto('/results');
         } catch (error) {
             showNotification('Bilgiler alınırken bir hata oluştu. Lütfen tekrar deneyiniz.', 'error');
         }
@@ -220,7 +241,7 @@
         
         doc.setFontSize(11);
         const examInfo = [
-            ["Sınav Tarihi", ":", "19.04.2025"],
+            ["Sınav Tarihi", ":", systemSettings?.examDate ? new Date(systemSettings.examDate).toLocaleDateString('tr-TR') : "Henüz belirlenmedi"],
             ["Sınav Binası", ":", examData.schoolName],
             ["Sınav Salonu", ":", examData.hallName],
             ["Sıra No", ":", examData.orderNumber.toString()]
@@ -323,10 +344,37 @@
 
     onMount(async () => {
         await Promise.all([
-            loadSchools(),
+            loadSystemSettings(),
             loadNotes()
         ]);
     });
+
+    async function loadSystemSettings() {
+        try {
+            isLoadingSettings = true;
+            const settingsRef = doc(db, "system", "settings");
+            const settingsSnap = await getDoc(settingsRef);
+            
+            if (settingsSnap.exists()) {
+                const data = settingsSnap.data();
+                systemSettings = {
+                    applicationDeadline: data.applicationDeadline || '',
+                    examDate: data.examDate || '',
+                    resultsReleaseDate: data.resultsReleaseDate || '',
+                    applicationEnabled: data.applicationEnabled || false,
+                    resultsEnabled: data.resultsEnabled || false,
+                    currentYear: data.currentYear || 2025,
+                    currentPhase: data.currentPhase || 'application',
+                    resultsFileUrl: data.resultsFileUrl || '',
+                    lastUpdated: data.lastUpdated?.toDate() || new Date()
+                };
+            }
+        } catch (error) {
+            console.error('Error loading system settings:', error);
+        } finally {
+            isLoadingSettings = false;
+        }
+    }
 </script>
 
 <div class="notifications">

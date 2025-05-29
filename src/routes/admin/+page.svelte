@@ -3,6 +3,18 @@
     import { collection, getDocs, query, orderBy, updateDoc, doc, deleteDoc, type QueryDocumentSnapshot, addDoc, setDoc, getDoc } from 'firebase/firestore';
     import { onMount } from 'svelte';
     import * as XLSX from 'xlsx';
+    import { fade } from 'svelte/transition';
+
+    function toTurkishUpperCase(str: string): string {
+        return str.replace('i', 'İ')
+                 .replace('ı', 'I')
+                 .replace('ğ', 'Ğ')
+                 .replace('ü', 'Ü')
+                 .replace('ş', 'Ş')
+                 .replace('ö', 'Ö')
+                 .replace('ç', 'Ç')
+                 .toUpperCase();
+    }
 
     interface ExamApplication {
         tcId: string;
@@ -65,6 +77,18 @@
     let originators: string[] = [];
     let error: string | null = null;
     let loading = true;
+    let isCustomSchool = false;
+    let customSchoolName = '';
+    let schoolList: string[] = [];
+    let isAddApplicationModalOpen = false;
+    let newApplication: Partial<ExamApplication> = {};
+    let isNewCustomSchool = false;
+    let newCustomSchoolName = '';
+    let newAvailableHalls: ExamHall[] = [];
+    let legalErrors = {
+        tckn: '',
+        phoneNumber: ''
+    };
 
     type NotificationType = 'success' | 'error' | 'warning';
     type Notification = {
@@ -116,7 +140,8 @@
     onMount(async () => {
         await Promise.all([
             loadApplications(),
-            loadSchools()
+            loadSchools(),
+            loadSchoolList()
         ]);
         await loadCapacityStats();
     });
@@ -218,6 +243,49 @@
 
     async function loadApplications() {
         try {
+            //if there are missing fields, warn me about that document
+            const requiredFields = [
+                'tcId',
+                'studentFullName',
+                'schoolName',
+                'parentFullName',
+                'phoneNumber',
+                'studentSchoolName',
+                'schoolId'
+            ];
+            const missingFieldsDocs: { id: string; missingFields: string[] }[] = [];
+
+            // First get all documents without ordering to check for missing fields
+            const allDocsQuery = query(collection(db, "examApplications"));
+            const allDocsSnapshot = await getDocs(allDocsQuery);
+
+            // Check all documents for missing fields
+            allDocsSnapshot.docs.forEach((doc) => {
+                const data = doc.data();
+                const missingFields = requiredFields.filter(field => !data[field] || data[field].trim() === '');
+                
+                if (missingFields.length > 0) {
+                    missingFieldsDocs.push({
+                        id: doc.id,
+                        missingFields
+                    });
+                }
+            });
+
+            if (missingFieldsDocs.length > 0) {
+                const warningMessage = `${allDocsSnapshot.docs.length} başvurudan ${missingFieldsDocs.length} tanesinde eksik alan bulundu:\n` +
+                    missingFieldsDocs.map(doc => {
+                        const data = allDocsSnapshot.docs.find(d => d.id === doc.id)?.data() || {};
+                        const existingFields = requiredFields.filter(field => data[field] && data[field].trim() !== '');
+                        return `TC: ${doc.id}\n` +
+                               `Eksik alanlar: ${doc.missingFields.join(', ')}\n` +
+                               `Mevcut alanlar: ${existingFields.map(field => `${field}: ${data[field]}`).join(', ')}`;
+                    }).join('\n\n');
+                showNotification(warningMessage, 'warning');
+                console.log(warningMessage);
+            }
+
+            // Now get the ordered documents for display
             const q = query(collection(db, "examApplications"), orderBy("assignedAt", "desc"));
             const querySnapshot = await getDocs(q);
             applications = querySnapshot.docs.map((doc: QueryDocumentSnapshot) => ({
@@ -233,6 +301,7 @@
                 hallId: doc.data().hallId || '',
                 orderNumber: doc.data().orderNumber || null
             } as ExamApplication));
+
             filterApplications();
             await loadCapacityStats();
             showNotification('Başvurular başarıyla yüklendi.', 'success');
@@ -282,6 +351,15 @@
     function openEditModal(application: ExamApplication) {
         selectedApplication = application;
         editFormData = { ...application };
+        
+        // Check if the student's school is in the predefined list
+        if (application.studentSchoolName && !schoolList.includes(application.studentSchoolName)) {
+            isCustomSchool = true;
+            customSchoolName = application.studentSchoolName;
+        } else {
+            isCustomSchool = false;
+        }
+
         if (application.schoolId) {
             loadHallsForSchool(application.schoolId);
         }
@@ -296,6 +374,20 @@
 
     async function handleEditSubmit() {
         if (!selectedApplication) return;
+
+        // Validate TC number
+        if (!validateTCID(editFormData.tcId || '')) {
+            showNotification('Geçersiz T.C. Kimlik Numarası.', 'error');
+            return;
+        }
+
+        // Convert names to uppercase
+        if (editFormData.studentFullName) {
+            editFormData.studentFullName = toTurkishUpperCase(editFormData.studentFullName);
+        }
+        if (editFormData.parentFullName) {
+            editFormData.parentFullName = toTurkishUpperCase(editFormData.parentFullName);
+        }
 
         try {
             // If hall assignment is being removed
@@ -549,9 +641,237 @@
         }
     }
 
+    async function loadSchoolList() {
+        try {
+            const response = await fetch('/schools.txt');
+            const text = await response.text();
+            schoolList = text.split('\n')
+                .map(line => line.trim())
+                .filter(line => line.length > 0)
+                .sort();
+        } catch (error) {
+            showNotification('Okul listesi yüklenirken bir hata oluştu.', 'error');
+        }
+    }
+
+    function handleSchoolSelect(event: Event) {
+        const select = event.target as HTMLSelectElement;
+        if (select.value === "DİĞER") {
+            isCustomSchool = true;
+            customSchoolName = '';
+            editFormData.studentSchoolName = '';
+        } else {
+            isCustomSchool = false;
+            editFormData.studentSchoolName = select.value;
+            customSchoolName = '';
+        }
+    }
+
+    function handleCustomSchoolInput(event: Event) {
+        const input = event.target as HTMLInputElement;
+        customSchoolName = toTurkishUpperCase(input.value);
+        editFormData.studentSchoolName = customSchoolName;
+    }
+
+    async function handleAddApplication() {
+        if (!newApplication.tcId || !newApplication.studentFullName || !newApplication.schoolName || 
+            !newApplication.parentFullName || !newApplication.phoneNumber || !newApplication.studentSchoolName ||
+            !newApplication.schoolId || !newApplication.hallId) {
+            showNotification('Lütfen tüm zorunlu alanları doldurun.', 'error');
+            return;
+        }
+
+        // Convert names to uppercase
+        newApplication.studentFullName = toTurkishUpperCase(newApplication.studentFullName);
+        newApplication.parentFullName = toTurkishUpperCase(newApplication.parentFullName);
+
+        try {
+            // Check if document already exists
+            const docRef = doc(db, "examApplications", newApplication.tcId);
+            const docSnap = await getDoc(docRef);
+            
+            if (docSnap.exists()) {
+                showNotification('Bu TC Kimlik numarası ile daha önce başvuru yapılmış.', 'error');
+                //update existing document
+                return;
+            }
+
+            // Get current students in the selected hall
+            const studentsSnapshot = await getDocs(collection(db, "schools", newApplication.schoolId, "examHalls", newApplication.hallId, "students"));
+            const selectedHall = newAvailableHalls.find(h => h.id === newApplication.hallId);
+            
+            if (!selectedHall) {
+                showNotification('Seçilen salon bulunamadı.', 'error');
+                return;
+            }
+
+            // dont Check hall capacity
+           // if (studentsSnapshot.size >= selectedHall.capacity) {
+           //     showNotification('Seçilen salon kapasitesi dolu.', 'error');
+           //     return;
+           // }
+
+            // Add student to the hall
+            await setDoc(doc(db, "schools", newApplication.schoolId, "examHalls", newApplication.hallId, "students", newApplication.tcId), {
+                tcId: newApplication.tcId,
+                studentFullName: newApplication.studentFullName,
+                schoolId: newApplication.schoolId,
+                schoolName: newApplication.schoolName,
+                studentSchoolName: newApplication.studentSchoolName,
+                parentFullName: newApplication.parentFullName,
+                phoneNumber: newApplication.phoneNumber,
+                hallName: newApplication.hallName,
+                hallId: newApplication.hallId,
+                assignedAt: new Date(),
+                orderNumber: studentsSnapshot.size + 1
+            });
+
+            // Add the application to Firestore
+            await setDoc(docRef, {
+                ...newApplication,
+                assignedAt: new Date(),
+                orderNumber: studentsSnapshot.size + 1
+            });
+
+            // Update local state
+            applications = [...applications, newApplication as ExamApplication];
+            filterApplications();
+            
+            showNotification('Başvuru başarıyla eklendi.', 'success');
+            isAddApplicationModalOpen = false;
+            newApplication = {};
+            isNewCustomSchool = false;
+            newCustomSchoolName = '';
+            newAvailableHalls = [];
+        } catch (error) {
+            showNotification('Başvuru eklenirken bir hata oluştu.', 'error');
+        }
+    }
+
+    function handleNewSchoolSelect(event: Event) {
+        const select = event.target as HTMLSelectElement;
+        if (select.value === "DİĞER") {
+            isNewCustomSchool = true;
+            newCustomSchoolName = '';
+            newApplication.studentSchoolName = '';
+        } else {
+            isNewCustomSchool = false;
+            newApplication.studentSchoolName = select.value;
+            newCustomSchoolName = '';
+        }
+    }
+
+    function handleNewCustomSchoolInput(event: Event) {
+        const input = event.target as HTMLInputElement;
+        newCustomSchoolName = toTurkishUpperCase(input.value);
+        newApplication.studentSchoolName = newCustomSchoolName;
+    }
+
+    async function handleNewSchoolChange(event: Event) {
+        const select = event.target as HTMLSelectElement;
+        const selectedSchoolId = select.value;
+        
+        // Find the selected school
+        const selectedSchool = schools.find(s => s.id === selectedSchoolId);
+        if (selectedSchool) {
+            newApplication.schoolId = selectedSchool.id;
+            newApplication.schoolName = selectedSchool.name;
+            // Reset hall information
+            newApplication.hallId = undefined;
+            newApplication.hallName = undefined;
+            newApplication.orderNumber = undefined;
+            // Load halls for the selected school
+            await loadHallsForNewApplication(selectedSchool.id);
+        }
+    }
+
+    async function loadHallsForNewApplication(schoolId: string) {
+        try {
+            const hallsQuery = query(collection(db, "schools", schoolId, "examHalls"));
+            const hallsSnapshot = await getDocs(hallsQuery);
+            newAvailableHalls = hallsSnapshot.docs.map(doc => ({
+                id: doc.id,
+                name: doc.data().name,
+                capacity: doc.data().capacity,
+                schoolId: schoolId,
+                schoolName: schools.find(s => s.id === schoolId)?.name || ''
+            }));
+        } catch (error) {
+            showNotification('Sınav salonları yüklenirken bir hata oluştu.', 'error');
+            newAvailableHalls = [];
+        }
+    }
+
+    async function handleNewHallChange(event: Event) {
+        const select = event.target as HTMLSelectElement;
+        const selectedHallId = select.value;
+        
+        if (!selectedHallId) {
+            newApplication.hallId = undefined;
+            newApplication.hallName = undefined;
+            newApplication.orderNumber = undefined;
+            return;
+        }
+
+        const selectedHall = newAvailableHalls.find(h => h.id === selectedHallId);
+        if (selectedHall) {
+            newApplication.hallId = selectedHall.id;
+            newApplication.hallName = selectedHall.name;
+        }
+    }
+
+    function validateTCID(tcId: string): boolean {
+        // Basic format checks
+        if (tcId.length !== 11) return false;
+        if (tcId[0] === '0') return false;
+        if (!/^\d{11}$/.test(tcId)) return false;
+
+        // Calculate sum of first 10 digits
+        let sum = 0;
+        for (let i = 0; i < 10; i++) {
+            sum += parseInt(tcId[i]);
+        }
+
+        // Check if last digit equals sum modulo 10
+        return parseInt(tcId[10]) === (sum % 10);
+    }
+
+    function handleTCKNInput(event: Event, isNew: boolean = false) {
+        const input = event.target as HTMLInputElement;
+        const formatted = input.value.replace(/[^0-9]/g, '').slice(0, 11);
+        
+        if (isNew) {
+            newApplication.tcId = formatted;
+        } else {
+            editFormData.tcId = formatted;
+        }
+        
+        // Clear any validation errors
+        legalErrors.tckn = '';
+        input.setCustomValidity('');
+    }
+
     $: {
         if (searchTerm !== undefined) {
             filterApplications();
+        }
+    }
+
+    function handleNameInput(event: Event, field: 'studentFullName' | 'parentFullName') {
+        const input = event.target as HTMLInputElement;
+        if (field === 'studentFullName') {
+            editFormData.studentFullName = toTurkishUpperCase(input.value);
+        } else {
+            editFormData.parentFullName = toTurkishUpperCase(input.value);
+        }
+    }
+
+    function handleNewNameInput(event: Event, field: 'studentFullName' | 'parentFullName') {
+        const input = event.target as HTMLInputElement;
+        if (field === 'studentFullName') {
+            newApplication.studentFullName = toTurkishUpperCase(input.value);
+        } else {
+            newApplication.parentFullName = toTurkishUpperCase(input.value);
         }
     }
 </script>
@@ -612,30 +932,60 @@
     </div>
 
     <div class="controls">
-        <input
-            type="text"
-            bind:value={searchTerm}
-            placeholder="Başvuruları ara..."
-            class="search-input"
-        />
-        <button on:click={() => isAddSchoolModalOpen = true} class="add-school-btn">
-            Okul Ekle
-        </button>
-        <button on:click={exportToExcel} class="excel-btn">
-            Excel'e Aktar
-        </button>
-        <a href="/admin/halls" class="halls-btn">
-            Sınav Salonları
-        </a>
-        <a href="/admin/notes" class="notes-btn">
-            Sınav Notları
-        </a>
-        <button on:click={loadApplications} class="refresh-btn">
-            Yenile
-        </button>
-        <button on:click={checkOrderNumbers} class="refresh-btn">
-            Sıra Numaralarını Kontrol Et
-        </button>
+        <div class="search-section">
+            <input
+                type="text"
+                bind:value={searchTerm}
+                placeholder="Başvuruları ara..."
+                class="search-input"
+            />
+        </div>
+        
+        <div class="action-groups">
+            <!-- Primary Actions -->
+            <div class="action-group primary-actions">
+                <button on:click={() => isAddApplicationModalOpen = true} class="add-application-btn">
+                    <span class="btn-icon">➕</span>
+                    Başvuru Ekle
+                </button>
+                <button on:click={exportToExcel} class="excel-btn">
+                    <span class="btn-icon">📊</span>
+                    Excel'e Aktar
+                </button>
+            </div>
+
+            <!-- Management Actions -->
+            <div class="action-group management-actions">
+                <a href="/admin/halls" class="halls-btn">
+                    <span class="btn-icon">🏫</span>
+                    Sınav Salonları
+                </a>
+                <button on:click={() => isAddSchoolModalOpen = true} class="add-school-btn">
+                    <span class="btn-icon">🏢</span>
+                    Okul Ekle
+                </button>
+                <a href="/admin/notes" class="notes-btn">
+                    <span class="btn-icon">📝</span>
+                    Sınav Notları
+                </a>
+            </div>
+
+            <!-- System Actions -->
+            <div class="action-group system-actions">
+                <a href="/admin/settings" class="settings-btn">
+                    <span class="btn-icon">⚙️</span>
+                    Sistem Ayarları
+                </a>
+                <button on:click={loadApplications} class="refresh-btn">
+                    <span class="btn-icon">🔄</span>
+                    Yenile
+                </button>
+                <button on:click={checkOrderNumbers} class="fix-btn">
+                    <span class="btn-icon">🔧</span>
+                    Sıra No. Kontrol
+                </button>
+            </div>
+        </div>
     </div>
 
     <div class="table-container">
@@ -772,7 +1122,42 @@
                         id="studentFullName"
                         bind:value={editFormData.studentFullName}
                         required
+                        on:input={(e) => handleNameInput(e, 'studentFullName')}
                     />
+                </div>
+
+                <div class="form-group">
+                    <label for="studentSchoolName">Öğrencinin Okulu</label>
+                    <div class="school-input-container">
+                        <select
+                            id="studentSchoolName"
+                            value={isCustomSchool ? "DİĞER" : editFormData.studentSchoolName}
+                            required
+                            class="school-select"
+                            class:expanded={isCustomSchool}
+                            on:change={handleSchoolSelect}
+                        >
+                            <option value="">Okul seçiniz</option>
+                            {#each schoolList as school}
+                                <option value={school}>{school}</option>
+                            {/each}
+                            <option value="DİĞER">DİĞER OKUL</option>
+                        </select>
+                        {#if isCustomSchool}
+                            <div class="custom-school-container" transition:fade>
+                                <input
+                                    type="text"
+                                    id="customSchoolName"
+                                    bind:value={customSchoolName}
+                                    required
+                                    placeholder="Okul adını giriniz"
+                                    class="custom-school-input"
+                                    on:input={handleCustomSchoolInput}
+                                />
+                                <small class="helper-text">Lütfen okulunuzun tam adını giriniz</small>
+                            </div>
+                        {/if}
+                    </div>
                 </div>
 
                 <div class="form-group">
@@ -797,6 +1182,7 @@
                         id="parentFullName"
                         bind:value={editFormData.parentFullName}
                         required
+                        on:input={(e) => handleNameInput(e, 'parentFullName')}
                     />
                 </div>
 
@@ -932,6 +1318,154 @@
                     Sil
                 </button>
             </div>
+        </div>
+    </div>
+{/if}
+
+{#if isAddApplicationModalOpen}
+    <div 
+        class="modal-overlay" 
+        on:click={() => isAddApplicationModalOpen = false}
+        on:keydown={(e) => e.key === 'Escape' && (isAddApplicationModalOpen = false)}
+        role="button"
+        tabindex="0"
+    >
+        <div 
+            class="modal" 
+            on:click|stopPropagation
+            on:keydown|stopPropagation
+            role="presentation"
+        >
+            <h2>Yeni Başvuru Ekle</h2>
+            <form on:submit|preventDefault={handleAddApplication}>
+                <div class="form-group">
+                    <label for="newTcId">T.C. Kimlik No</label>
+                    <input
+                        type="text"
+                        id="newTcId"
+                        bind:value={newApplication.tcId}
+                        required
+                        inputmode="numeric"
+                        on:input={(e) => handleTCKNInput(e, true)}
+                        placeholder="T.C. Kimlik Numaranızı giriniz"
+                    />
+                    {#if legalErrors.tckn}
+                        <div class="error-message">{legalErrors.tckn}</div>
+                    {/if}
+                </div>
+
+                <div class="form-group">
+                    <label for="newStudentFullName">Öğrenci Adı Soyadı</label>
+                    <input
+                        type="text"
+                        id="newStudentFullName"
+                        bind:value={newApplication.studentFullName}
+                        required
+                        on:input={(e) => handleNewNameInput(e, 'studentFullName')}
+                    />
+                </div>
+                   <div class="form-group">
+                    <label for="newParentFullName">Veli Adı Soyadı</label>
+                    <input
+                        type="text"
+                        id="newParentFullName"
+                        bind:value={newApplication.parentFullName}
+                        required
+                        on:input={(e) => handleNewNameInput(e, 'parentFullName')}
+                    />
+                </div>
+                 
+
+                <div class="form-group">
+                    <label for="newPhoneNumber">Telefon</label>
+                    <input
+                        type="text"
+                        id="newPhoneNumber"
+                        bind:value={newApplication.phoneNumber}
+                        required
+                    />
+                </div>
+
+                <div class="form-group">
+                    <label for="newStudentSchoolName">Öğrencinin Okulu</label>
+                    <div class="school-input-container">
+                        <select
+                            id="newStudentSchoolName"
+                            value={isNewCustomSchool ? "DİĞER" : newApplication.studentSchoolName}
+                            required
+                            class="school-select"
+                            class:expanded={isNewCustomSchool}
+                            on:change={handleNewSchoolSelect}
+                        >
+                            <option value="">Okul seçiniz</option>
+                            {#each schoolList as school}
+                                <option value={school}>{school}</option>
+                            {/each}
+                            <option value="DİĞER">DİĞER OKUL</option>
+                        </select>
+                        {#if isNewCustomSchool}
+                            <div class="custom-school-container" transition:fade>
+                                <input
+                                    type="text"
+                                    id="newCustomSchoolName"
+                                    bind:value={newCustomSchoolName}
+                                    required
+                                    placeholder="Okul adını giriniz"
+                                    class="custom-school-input"
+                                    on:input={handleNewCustomSchoolInput}
+                                />
+                                <small class="helper-text">Lütfen okulunuzun tam adını giriniz</small>
+                            </div>
+                        {/if}
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="newSchoolName">Sınav Binası</label>
+                    <select
+                        id="newSchoolName"
+                        bind:value={newApplication.schoolId}
+                        required
+                        on:change={handleNewSchoolChange}
+                    >
+                        <option value="">Okul seçiniz</option>
+                        {#each schools as school}
+                            <option value={school.id}>{school.name}</option>
+                        {/each}
+                    </select>
+                </div>
+
+            
+
+                <div class="form-group">
+                    <label for="newHallId">Sınav Salonu</label>
+                    <select
+                        id="newHallId"
+                        bind:value={newApplication.hallId}
+                        required
+                        on:change={handleNewHallChange}
+                    >
+                        <option value="">Sınav salonu seçiniz</option>
+                        {#each newAvailableHalls as hall}
+                            <option value={hall.id}>{hall.name}</option>
+                        {/each}
+                    </select>
+                    {#if newApplication.hallId}
+                        <small class="helper-text">
+                            Kapasite: {newAvailableHalls.find(h => h.id === newApplication.hallId)?.capacity || 0}
+                        </small>
+                    {/if}
+                </div>
+
+                <div class="modal-actions">
+                    <button type="button" class="cancel-btn" on:click={() => isAddApplicationModalOpen = false}>
+                        İptal
+                    </button>
+                    <button type="submit" class="save-btn">
+                        Ekle
+                    </button>
+                </div>
+            </form>
         </div>
     </div>
 {/if}
@@ -1086,82 +1620,196 @@
     }
 
     .controls {
-        display: flex;
-        gap: 1rem;
         margin-bottom: 2rem;
-        flex-wrap: nowrap;
-        min-width: max-content;
+        display: flex;
+        flex-direction: column;
+        gap: 1.5rem;
+    }
+
+    .search-section {
+        width: 100%;
     }
 
     .search-input {
-        flex: 1;
-        padding: 0.75rem;
+        width: 100%;
+        padding: 1rem;
         border: 2px solid #e2e8f0;
-        border-radius: 8px;
+        border-radius: 12px;
         font-size: 1rem;
-        background-color: #f8fafc;
+        background: linear-gradient(145deg, #ffffff, #f8fafc);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+        transition: all 0.3s ease;
     }
 
     .search-input:focus {
         outline: none;
         border-color: #3182ce;
-        box-shadow: 0 0 0 3px rgba(49, 130, 206, 0.1);
+        box-shadow: 0 0 0 3px rgba(49, 130, 206, 0.1), 0 2px 12px rgba(0, 0, 0, 0.1);
+        background: #ffffff;
     }
 
-    .halls-btn {
-        padding: 0.75rem 1.5rem;
+    .action-groups {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1.5rem;
+        justify-content: space-between;
+        align-items: flex-start;
+    }
+
+    .action-group {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        padding: 1rem;
+        background: #f8fafc;
+        border-radius: 12px;
+        border: 1px solid #e2e8f0;
+        min-width: 250px;
+        flex: 1;
+    }
+
+    .action-group::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 3px;
+        border-radius: 12px 12px 0 0;
+    }
+
+    .primary-actions {
+        position: relative;
+        background: linear-gradient(145deg, #ebf8ff, #bee3f8);
+        border-color: #90cdf4;
+    }
+
+    .primary-actions::before {
+        background: linear-gradient(to right, #3182ce, #2c5282);
+    }
+
+    .management-actions {
+        position: relative;
+        background: linear-gradient(145deg, #f0fff4, #c6f6d5);
+        border-color: #9ae6b4;
+    }
+
+    .management-actions::before {
         background: linear-gradient(to right, #38a169, #2f855a);
-        color: white;
-        border: none;
-        border-radius: 8px;
-        cursor: pointer;
-        font-weight: 600;
-        transition: all 0.3s ease;
-        text-decoration: none;
+    }
+
+    .system-actions {
+        position: relative;
+        background: linear-gradient(145deg, #faf5ff, #e9d8fd);
+        border-color: #d6bcfa;
+    }
+
+    .system-actions::before {
+        background: linear-gradient(to right, #805ad5, #6b46c1);
+    }
+
+    /* Base button styles */
+    .action-group button,
+    .action-group a {
         display: inline-flex;
         align-items: center;
+        gap: 0.5rem;
+        padding: 0.75rem 1.25rem;
+        border: none;
+        border-radius: 8px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        text-decoration: none;
+        font-size: 0.9rem;
+        white-space: nowrap;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    }
+
+    .action-group button:hover,
+    .action-group a:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+
+    .btn-icon {
+        font-size: 1rem;
+        line-height: 1;
+    }
+
+    /* Primary action buttons */
+    .add-application-btn {
+        background: linear-gradient(135deg, #3182ce, #2c5282);
+        color: white;
+    }
+
+    .add-application-btn:hover {
+        background: linear-gradient(135deg, #2c5282, #2a4365);
+    }
+
+    .excel-btn {
+        background: linear-gradient(135deg, #059669, #047857);
+        color: white;
+    }
+
+    .excel-btn:hover {
+        background: linear-gradient(135deg, #047857, #065f46);
+    }
+
+    /* Management action buttons */
+    .halls-btn {
+        background: linear-gradient(135deg, #38a169, #2f855a);
+        color: white;
     }
 
     .halls-btn:hover {
-        background: linear-gradient(to right, #2f855a, #276749);
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(56, 161, 105, 0.2);
+        background: linear-gradient(135deg, #2f855a, #276749);
+    }
+
+    .add-school-btn {
+        background: linear-gradient(135deg, #319795, #2c7a7b);
+        color: white;
+    }
+
+    .add-school-btn:hover {
+        background: linear-gradient(135deg, #2c7a7b, #285e61);
     }
 
     .notes-btn {
-        padding: 0.75rem 1.5rem;
-        background: linear-gradient(to right, #805ad5, #6b46c1);
+        background: linear-gradient(135deg, #d69e2e, #b7791f);
         color: white;
-        text-decoration: none;
-        border-radius: 8px;
-        cursor: pointer;
-        font-weight: 600;
-        transition: all 0.3s ease;
-        display: inline-flex;
-        align-items: center;
     }
 
     .notes-btn:hover {
-        background: linear-gradient(to right, #6b46c1, #553c9a);
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(107, 70, 193, 0.2);
+        background: linear-gradient(135deg, #b7791f, #975a16);
+    }
+
+    /* System action buttons */
+    .settings-btn {
+        background: linear-gradient(135deg, #805ad5, #6b46c1);
+        color: white;
+    }
+
+    .settings-btn:hover {
+        background: linear-gradient(135deg, #6b46c1, #553c9a);
     }
 
     .refresh-btn {
-        padding: 0.75rem 1.5rem;
-        background: linear-gradient(to right, #3182ce, #2c5282);
+        background: linear-gradient(135deg, #4299e1, #3182ce);
         color: white;
-        border: none;
-        border-radius: 8px;
-        cursor: pointer;
-        font-weight: 600;
-        transition: all 0.3s ease;
     }
 
     .refresh-btn:hover {
-        background: linear-gradient(to right, #2c5282, #2a4365);
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(49, 130, 206, 0.2);
+        background: linear-gradient(135deg, #3182ce, #2c5282);
+    }
+
+    .fix-btn {
+        background: linear-gradient(135deg, #ed8936, #dd6b20);
+        color: white;
+    }
+
+    .fix-btn:hover {
+        background: linear-gradient(135deg, #dd6b20, #c05621);
     }
 
     .table-container {
@@ -1190,12 +1838,13 @@
 
     th:nth-child(1), td:nth-child(1) { width: 140px; } /* TC ID */
     th:nth-child(2), td:nth-child(2) { width: 250px; } /* Student Name */
-    th:nth-child(3), td:nth-child(3) { width: 250px; } /* School */
+    th:nth-child(3), td:nth-child(3) { width: 250px; } /* Student School Name */
     th:nth-child(4), td:nth-child(4) { width: 250px; } /* Parent Name */
     th:nth-child(5), td:nth-child(5) { width: 140px; } /* Phone */
-    th:nth-child(6), td:nth-child(6) { width: 180px; } /* Exam Hall */
-    th:nth-child(7), td:nth-child(7) { width: 120px; } /* Order No */
-    th:nth-child(8), td:nth-child(8) { width: 140px; } /* Actions */
+    th:nth-child(6), td:nth-child(6) { width: 180px; } /* School */
+    th:nth-child(7), td:nth-child(7) { width: 120px; } /* Exam Hall */
+    th:nth-child(8), td:nth-child(8) { width: 140px; } /* Order No */
+    th:nth-child(9), td:nth-child(9) { width: 140px; } /* Actions */
 
     th {
         background: #f7fafc;
@@ -1469,15 +2118,33 @@
         }
 
         .controls {
-            flex-direction: column;
-            gap: 0.75rem;
+            gap: 1rem;
         }
 
-        .search-input,
-        .add-school-btn,
-        .halls-btn,
-        .refresh-btn {
+        .action-groups {
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .action-group {
+            min-width: auto;
             width: 100%;
+            padding: 0.75rem;
+        }
+
+        .action-group button,
+        .action-group a {
+            flex: 1;
+            justify-content: center;
+            padding: 0.75rem;
+            font-size: 0.85rem;
+        }
+
+        .btn-icon {
+            font-size: 0.9rem;
+        }
+
+        .search-input {
             padding: 0.75rem;
             font-size: 0.95rem;
         }
@@ -1702,6 +2369,14 @@
         box-shadow: 0 4px 12px rgba(220, 38, 38, 0.2);
     }
 
+    .error-message {
+        color: #e53e3e;
+        font-size: 0.875rem;
+        margin-top: 0.5rem;
+        padding-left: 0.5rem;
+        font-weight: 500;
+    }
+
     @keyframes modalFadeIn {
         from {
             opacity: 0;
@@ -1715,5 +2390,22 @@
 
     .delete-confirmation-modal {
         animation: modalFadeIn 0.3s ease-out;
+    }
+
+    .add-application-btn {
+        padding: 0.75rem 1.5rem;
+        background: linear-gradient(to right, #3182ce, #2c5282);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-weight: 600;
+        transition: all 0.3s ease;
+    }
+
+    .add-application-btn:hover {
+        background: linear-gradient(to right, #2c5282, #2a4365);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(49, 130, 206, 0.2);
     }
 </style> 
