@@ -544,13 +544,13 @@
     
     input:focus {
         outline: none;
-        border-color: #3182ce;
-        box-shadow: 0 0 0 3px rgba(49, 130, 206, 0.1);
+        border-color: #14b8a6;
+        box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.1);
         background-color: #ffffff;
     }
     
     .submit-btn, .download-btn {
-        background: linear-gradient(to right, #3182ce, #2c5282);
+        background: linear-gradient(to right, #0d9488, #115e59);
         color: white;
         padding: 1rem;
         border: none;
@@ -574,9 +574,9 @@
     }
     
     .submit-btn:not(:disabled):hover, .download-btn:hover {
-        background: linear-gradient(to right, #2c5282, #2a4365);
+        background: linear-gradient(to right, #115e59, #134e4a);
         transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(49, 130, 206, 0.2);
+        box-shadow: 0 4px 12px rgba(13, 148, 136, 0.2);
     }
     
     .submit-btn:active, .download-btn:active {
@@ -609,7 +609,7 @@
         transform: translateX(-50%);
         width: 100px;
         height: 3px;
-        background: linear-gradient(to right, #3182ce, #2c5282);
+        background: linear-gradient(to right, #0d9488, #115e59);
         border-radius: 2px;
     }
     

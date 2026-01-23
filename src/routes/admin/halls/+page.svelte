@@ -66,9 +66,11 @@
                 id: doc.id,
                 name: doc.data().name
             }));
-            showNotification('Okullar başarıyla yüklendi.', 'success');
+            // Removed success notification to reduce spam on page load
         } catch (error) {
-            showNotification('Okullar yüklenirken bir hata oluştu.', 'error');
+            console.error('Error loading schools:', error);
+            const errorMessage = error instanceof Error ? error.message : 'Bilinmeyen bir hata';
+            showNotification(`Okullar yüklenirken bir hata oluştu: ${errorMessage}`, 'error');
         }
     }
 
@@ -107,7 +109,7 @@
                 // If all parts match up to the shortest length, shorter name comes first
                 return aParts.length - bParts.length;
             });
-            showNotification('Sınav salonları başarıyla yüklendi.', 'success');
+            // Removed success notification to reduce spam on page load
         } catch (error) {
             showNotification('Sınav salonları yüklenirken bir hata oluştu.', 'error');
         }
@@ -145,7 +147,26 @@
     }
 
     async function handleCreateSubmit() {
-        if (!selectedSchool) return;
+        if (!selectedSchool) {
+            showNotification('Lütfen önce bir okul seçin.', 'error');
+            return;
+        }
+
+        if (!formData.name.trim()) {
+            showNotification('Salon adı boş olamaz.', 'error');
+            return;
+        }
+
+        if (formData.capacity < 1 || formData.capacity > 100) {
+            showNotification('Kapasite 1 ile 100 arasında olmalıdır.', 'error');
+            return;
+        }
+
+        // Check if hall name already exists for this school
+        if (examHalls.some(h => h.name.toLowerCase() === formData.name.trim().toLowerCase())) {
+            showNotification('Bu isimde bir salon zaten mevcut.', 'warning');
+            return;
+        }
 
         try {
             const hallRef = doc(collection(db, "schools", selectedSchool.id, "examHalls"));
@@ -167,7 +188,9 @@
             showNotification('Sınav salonu başarıyla oluşturuldu.', 'success');
             closeModals();
         } catch (error) {
-            showNotification('Sınav salonu oluşturulurken bir hata oluştu.', 'error');
+            console.error('Error creating hall:', error);
+            const errorMessage = error instanceof Error ? error.message : 'Bilinmeyen bir hata';
+            showNotification(`Sınav salonu oluşturulurken bir hata oluştu: ${errorMessage}`, 'error');
         }
     }
 
@@ -600,13 +623,13 @@
 
     .school-select:focus {
         outline: none;
-        border-color: #3182ce;
+        border-color: #14b8a6;
         box-shadow: 0 0 0 3px rgba(49, 130, 206, 0.1);
     }
 
     .create-btn {
         padding: 0.75rem 1.5rem;
-        background: linear-gradient(to right, #3182ce, #2c5282);
+        background: linear-gradient(to right, #0d9488, #115e59);
         color: white;
         border: none;
         border-radius: 8px;
@@ -616,9 +639,9 @@
     }
 
     .create-btn:hover {
-        background: linear-gradient(to right, #2c5282, #2a4365);
+        background: linear-gradient(to right, #115e59, #134e4a);
         transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(49, 130, 206, 0.2);
+        box-shadow: 0 4px 12px rgba(13, 148, 136, 0.2);
     }
 
     .table-container {
@@ -666,7 +689,7 @@
         transform: translateX(-50%);
         width: 100px;
         height: 3px;
-        background: linear-gradient(to right, #3182ce, #2c5282);
+        background: linear-gradient(to right, #0d9488, #115e59);
         border-radius: 2px;
     }
 
@@ -686,11 +709,11 @@
     }
 
     .edit-btn {
-        background: #3182ce;
+        background: #14b8a6;
     }
 
     .edit-btn:hover {
-        background: #2c5282;
+        background: #0d9488;
     }
 
     .delete-btn {
@@ -749,7 +772,7 @@
 
     .form-group input:focus {
         outline: none;
-        border-color: #3182ce;
+        border-color: #14b8a6;
         box-shadow: 0 0 0 3px rgba(49, 130, 206, 0.1);
     }
 
@@ -779,15 +802,15 @@
     }
 
     .save-btn {
-        background: linear-gradient(to right, #3182ce, #2c5282);
+        background: linear-gradient(to right, #0d9488, #115e59);
         color: white;
         border: none;
     }
 
     .save-btn:hover {
-        background: linear-gradient(to right, #2c5282, #2a4365);
+        background: linear-gradient(to right, #115e59, #134e4a);
         transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(49, 130, 206, 0.2);
+        box-shadow: 0 4px 12px rgba(13, 148, 136, 0.2);
     }
 
     .notifications {
@@ -885,7 +908,7 @@
 
     .print-btn {
         padding: 0.75rem 1.5rem;
-        background: linear-gradient(to right, #2c5282, #2b6cb0);
+        background: linear-gradient(to right, #115e59, #0f766e);
         color: white;
         border: none;
         border-radius: 8px;
@@ -895,7 +918,7 @@
     }
 
     .print-btn:hover {
-        background: linear-gradient(to right, #2b6cb0, #2c5282);
+        background: linear-gradient(to right, #0f766e, #115e59);
         transform: translateY(-1px);
         box-shadow: 0 4px 12px rgba(44, 82, 130, 0.2);
     }

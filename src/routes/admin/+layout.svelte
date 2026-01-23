@@ -1,6 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, type User } from 'firebase/auth';
+    import { onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from 'firebase/auth';
+    import { auth } from '$lib/firebase';
     import { goto } from '$app/navigation';
 
     let user: User | null = null;
@@ -10,7 +11,6 @@
     let error = '';
 
     onMount(() => {
-        const auth = getAuth();
         const unsubscribe = onAuthStateChanged(auth, (u) => {
             user = u;
             loading = false;
@@ -24,10 +24,18 @@
         error = '';
         
         try {
-            const auth = getAuth();
             await signInWithEmailAndPassword(auth, email, password);
         } catch (e) {
             error = 'Invalid email or password';
+        }
+    }
+
+    async function handleSignOut() {
+        try {
+            await signOut(auth);
+            goto('/');
+        } catch (e) {
+            console.error('Error signing out:', e);
         }
     }
 </script>
@@ -36,12 +44,12 @@
     <div class="loading">Yükleniyor...</div>
 {:else if !user}
     <div class="login-container">
-        <div class="login-box">
+        <div class="login-box" role="main">
             <h1>Yönetici Girişi</h1>
             
-            <form on:submit={handleLogin}>
+            <form on:submit={handleLogin} aria-label="Yönetici giriş formu">
                 {#if error}
-                    <div class="error">{error}</div>
+                    <div class="error" role="alert" aria-live="polite">{error}</div>
                 {/if}
                 
                 <div class="form-group">
@@ -52,6 +60,8 @@
                         bind:value={email}
                         required
                         placeholder="Yönetici emailinizi giriniz"
+                        aria-required="true"
+                        autocomplete="email"
                     />
                 </div>
                 
@@ -63,15 +73,81 @@
                         bind:value={password}
                         required
                         placeholder="Şifrenizi giriniz"
+                        aria-required="true"
+                        autocomplete="current-password"
                     />
                 </div>
                 
-                <button type="submit" class="login-btn">Giriş Yap</button>
+                <button type="submit" class="login-btn" aria-label="Giriş yap">Giriş Yap</button>
             </form>
         </div>
     </div>
 {:else}
-    <slot />
+    <div class="admin-layout">
+        <header class="admin-header">
+            <div class="header-content">
+                <h2>Yönetici Paneli</h2>
+                <div class="user-info">
+                    <span class="user-email">{user.email}</span>
+                    <button on:click={handleSignOut} class="signout-btn">
+                        <span class="btn-icon">🚪</span>
+                        Çıkış Yap
+                    </button>
+                </div>
+            </div>
+        </header>
+        
+        <div class="admin-body">
+            <aside class="admin-sidebar" aria-label="Ana navigasyon menüsü">
+                <nav class="sidebar-nav" role="navigation">
+                    <a 
+                        href="/admin" 
+                        class="nav-item" 
+                        class:active={typeof window !== 'undefined' && window.location.pathname === '/admin'}
+                        aria-label="Başvurular sayfasına git"
+                        aria-current={typeof window !== 'undefined' && window.location.pathname === '/admin' ? 'page' : undefined}
+                    >
+                        <span class="nav-icon" aria-hidden="true">📊</span>
+                        <span class="nav-label">Başvurular</span>
+                    </a>
+                    <a 
+                        href="/admin/halls" 
+                        class="nav-item" 
+                        class:active={typeof window !== 'undefined' && window.location.pathname === '/admin/halls'}
+                        aria-label="Sınav salonları sayfasına git"
+                        aria-current={typeof window !== 'undefined' && window.location.pathname === '/admin/halls' ? 'page' : undefined}
+                    >
+                        <span class="nav-icon" aria-hidden="true">🏫</span>
+                        <span class="nav-label">Sınav Salonları</span>
+                    </a>
+                    <a 
+                        href="/admin/notes" 
+                        class="nav-item" 
+                        class:active={typeof window !== 'undefined' && window.location.pathname === '/admin/notes'}
+                        aria-label="Sınav notları sayfasına git"
+                        aria-current={typeof window !== 'undefined' && window.location.pathname === '/admin/notes' ? 'page' : undefined}
+                    >
+                        <span class="nav-icon" aria-hidden="true">📝</span>
+                        <span class="nav-label">Sınav Notları</span>
+                    </a>
+                    <a 
+                        href="/admin/settings" 
+                        class="nav-item" 
+                        class:active={typeof window !== 'undefined' && window.location.pathname === '/admin/settings'}
+                        aria-label="Sistem ayarları sayfasına git"
+                        aria-current={typeof window !== 'undefined' && window.location.pathname === '/admin/settings' ? 'page' : undefined}
+                    >
+                        <span class="nav-icon" aria-hidden="true">⚙️</span>
+                        <span class="nav-label">Sistem Ayarları</span>
+                    </a>
+                </nav>
+            </aside>
+            
+            <main class="admin-content" role="main">
+                <slot />
+            </main>
+        </div>
+    </div>
 {/if}
 
 <style>
@@ -122,14 +198,14 @@
 
     input:focus {
         outline: none;
-        border-color: #4A90E2;
-        box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.2);
+        border-color: #14b8a6;
+        box-shadow: 0 0 0 2px rgba(20, 184, 166, 0.2);
     }
 
     .login-btn {
         width: 100%;
         padding: 0.75rem;
-        background: #4A90E2;
+        background: #0d9488;
         color: white;
         border: none;
         border-radius: 4px;
@@ -140,7 +216,7 @@
     }
 
     .login-btn:hover {
-        background: #357ABD;
+        background: #0f766e;
     }
 
     .error {
@@ -155,5 +231,184 @@
         text-align: center;
         margin-bottom: 2rem;
         color: #333;
+    }
+
+    .admin-layout {
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        background: #f5f7fa;
+    }
+
+    .admin-header {
+        background: linear-gradient(135deg, #0d9488 0%, #115e59 100%);
+        color: white;
+        padding: 1rem 2rem;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+        position: sticky;
+        top: 0;
+        z-index: 1000;
+    }
+
+    .header-content {
+        max-width: 1600px;
+        margin: 0 auto;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .header-content h2 {
+        margin: 0;
+        font-size: 1.5rem;
+        font-weight: 600;
+    }
+
+    .user-info {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+    }
+
+    .user-email {
+        font-size: 0.9rem;
+        opacity: 0.9;
+    }
+
+    .signout-btn {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 1rem;
+        background: rgba(255, 255, 255, 0.2);
+        color: white;
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        border-radius: 6px;
+        font-size: 0.9rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .signout-btn:hover {
+        background: rgba(255, 255, 255, 0.3);
+        transform: translateY(-1px);
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    }
+
+    .signout-btn .btn-icon {
+        font-size: 1.1rem;
+    }
+
+    .admin-body {
+        display: flex;
+        flex: 1;
+        max-width: 1600px;
+        margin: 0 auto;
+        width: 100%;
+    }
+
+    .admin-sidebar {
+        width: 250px;
+        background: white;
+        padding: 1.5rem 0;
+        box-shadow: 2px 0 8px rgba(0, 0, 0, 0.05);
+        position: sticky;
+        top: 73px;
+        height: calc(100vh - 73px);
+        overflow-y: auto;
+    }
+
+    .sidebar-nav {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        padding: 0 1rem;
+    }
+
+    .nav-item {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        padding: 0.875rem 1rem;
+        border-radius: 8px;
+        text-decoration: none;
+        color: #4a5568;
+        font-weight: 500;
+        transition: all 0.2s ease;
+        cursor: pointer;
+    }
+
+    .nav-item:hover {
+        background: #f7fafc;
+        color: #2d3748;
+        transform: translateX(4px);
+    }
+
+    .nav-item.active {
+        background: linear-gradient(135deg, #0d9488 0%, #115e59 100%);
+        color: white;
+        box-shadow: 0 2px 8px rgba(13, 148, 136, 0.3);
+    }
+
+    .nav-icon {
+        font-size: 1.25rem;
+        line-height: 1;
+    }
+
+    .nav-label {
+        font-size: 0.95rem;
+    }
+
+    .admin-content {
+        flex: 1;
+        padding: 0;
+        overflow-x: hidden;
+    }
+
+    .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border-width: 0;
+    }
+
+    @media (max-width: 768px) {
+        .admin-body {
+            flex-direction: column;
+        }
+
+        .admin-sidebar {
+            width: 100%;
+            height: auto;
+            position: static;
+            padding: 1rem 0;
+        }
+
+        .sidebar-nav {
+            flex-direction: row;
+            overflow-x: auto;
+            padding: 0 1rem;
+        }
+
+        .nav-item {
+            flex-shrink: 0;
+            min-width: 120px;
+            justify-content: center;
+            padding: 0.75rem 1rem;
+        }
+
+        .nav-label {
+            font-size: 0.85rem;
+        }
+
+        .nav-icon {
+            font-size: 1.1rem;
+        }
     }
 </style> 

@@ -143,11 +143,8 @@
                     RESULTS_RELEASE_DATE = new Date(systemSettings.resultsReleaseDate);
                 }
                 
-                // Check if results are enabled by admin
-                if (systemSettings.resultsEnabled) {
-                    isResultsAvailable = true;
-                    isCountdownFinished = true;
-                }
+                // Don't set isResultsAvailable here - let updateCountdown() handle it
+                // Results will only be available when countdown finishes AND resultsEnabled is true
             }
         } catch (error) {
             console.error('Error loading system settings:', error);
@@ -169,16 +166,19 @@
             minutes = Math.floor((difference % (1000 * 60 * 60)) / (1000 * 60));
             seconds = Math.floor((difference % (1000 * 60)) / 1000);
             
-            // If results are manually enabled, show them regardless of countdown
+            // Countdown is still running - don't show results yet
+            isCountdownFinished = false;
+            isResultsAvailable = false;
+        } else {
+            // Time has passed - hide countdown
+            isCountdownFinished = true;
+            
+            // Only show results if admin has enabled them
             if (systemSettings?.resultsEnabled) {
                 isResultsAvailable = true;
-                isCountdownFinished = true;
             } else {
                 isResultsAvailable = false;
             }
-        } else {
-            isCountdownFinished = true;
-            isResultsAvailable = true;
         }
     }
 
@@ -572,13 +572,13 @@
 
     input[type="text"]:focus {
         outline: none;
-        border-color: #4299e1; /* Blue focus border */
+        border-color: #14b8a6; /* Teal focus border */
         box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.2);
         background-color: #ffffff;
     }
 
     .submit-btn {
-        background: linear-gradient(135deg, #4299e1 0%, #3182ce 100%); /* Updated gradient */
+        background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%); /* Updated gradient */
         color: white;
         padding: 1rem 1.2rem; /* Increased padding */
         border: none;
@@ -601,9 +601,9 @@
     }
 
     .submit-btn:not(:disabled):hover {
-        background: linear-gradient(135deg, #3182ce 0%, #2b6cb0 100%); /* Darker gradient on hover */
+        background: linear-gradient(135deg, #0d9488 0%, #115e59 100%); /* Darker gradient on hover */
         transform: translateY(-2px);
-        box-shadow: 0 6px 15px rgba(49, 130, 206, 0.3);
+        box-shadow: 0 6px 15px rgba(13, 148, 136, 0.3);
     }
 
     .submit-btn:active {
@@ -644,7 +644,7 @@
         transform: translateX(-50%);
         width: 100px; /* Longer underline */
         height: 3px;
-        background: linear-gradient(135deg, #4299e1 0%, #3182ce 100%); /* Match button gradient */
+        background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%); /* Match button gradient */
         border-radius: 1.5px;
     }
 
@@ -652,8 +652,8 @@
     .loading-message {
         text-align: center;
         padding: 1.8rem;
-        color: #2c5282;
-        background-color: #ebf8ff;
+        color: #115e59;
+        background-color: #ccfbf1;
         border-radius: 10px;
         margin: 2rem auto;
         font-weight: 500;
@@ -771,7 +771,7 @@
 
     .info-section h3 { /* Section titles: Öğrenci, Genel, Ders */
         font-size: 1.5rem; /* Larger section titles */
-        color: #3182ce; /* Blue color for titles */
+        color: #14b8a6; /* Teal color for titles */
         margin-bottom: 2rem;
         text-align: center; /* Center align section titles */
         padding-bottom: 0.6rem;
@@ -862,7 +862,7 @@
     .overall-item .value {
         font-size: 1.75rem; /* Much larger value */
         font-weight: 700; /* Bold value */
-        color: #2c5282; /* Dark blue value */
+        color: #115e59; /* Dark teal value */
         line-height: 1.2; /* Adjust line height */
     }
 
@@ -894,7 +894,7 @@
 
     .subject-item h4 { /* Subject names */
         font-size: 1.25rem; /* Larger subject names */
-        color: #3182ce; /* Blue color matching the theme */
+        color: #14b8a6; /* Teal color matching the theme */
         margin-bottom: 1.5rem;
         font-weight: 600;
         text-align: center; /* Center subject names */
@@ -950,7 +950,7 @@
 
     .sub-item.net-item .value {
         font-weight: 700; /* Bolder net value */
-        color: #3182ce; /* Blue net value */
+        color: #14b8a6; /* Teal net value */
         font-size: 1.2rem; /* Slightly larger net */
     }
 
@@ -976,7 +976,7 @@
         left: 0;
         right: 0;
         height: 4px;
-        background: linear-gradient(90deg, #3182ce 0%, #63b3ed 100%);
+        background: linear-gradient(90deg, #14b8a6 0%, #5eead4 100%);
     }
 
     .status-card .label {
@@ -991,7 +991,7 @@
 
     .status-card .value {
         font-size: 1.4rem;
-        color: #2c5282;
+        color: #115e59;
         display: block;
         transition: color 0.3s ease;
     }
@@ -1202,7 +1202,7 @@
     .countdown-value {
         font-size: 2.5rem;
         font-weight: 700;
-        color: #3182ce;
+        color: #14b8a6;
         line-height: 1.2;
         margin-bottom: 0.5rem;
     }
@@ -1216,7 +1216,7 @@
 
     .countdown-date {
         font-size: 1rem;
-        color: #2c5282;
+        color: #115e59;
         font-weight: 500;
         opacity: 0.8;
     }
@@ -1293,7 +1293,7 @@
 
     .not-available-container h2 {
         font-size: 2rem;
-        color: #2c5282;
+        color: #115e59;
         margin-bottom: 1.5rem;
         font-weight: 700;
     }
@@ -1353,7 +1353,7 @@
         border: 1px solid #a5d8ff; /* Light blue border */
         text-align: center;
         box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
-        border-left: 5px solid #3182ce; /* Accent border */
+        border-left: 5px solid #14b8a6; /* Accent border */
     }
 
     .registration-info h3 {

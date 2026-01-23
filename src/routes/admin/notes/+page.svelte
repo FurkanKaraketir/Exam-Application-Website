@@ -45,9 +45,11 @@
                 const data = notesSnap.data();
                 notes = data.info || [];
             }
-            showNotification('Notlar başarıyla yüklendi.', 'success');
+            // Removed success notification to reduce spam on page load
         } catch (error) {
-            showNotification('Notlar yüklenirken bir hata oluştu.', 'error');
+            console.error('Error loading notes:', error);
+            const errorMessage = error instanceof Error ? error.message : 'Bilinmeyen bir hata';
+            showNotification(`Notlar yüklenirken bir hata oluştu: ${errorMessage}`, 'error');
         } finally {
             loading = false;
         }
@@ -56,6 +58,11 @@
     async function addNote() {
         if (!newNote.trim()) {
             showNotification('Not boş olamaz.', 'error');
+            return;
+        }
+
+        if (newNote.trim().length < 3) {
+            showNotification('Not en az 3 karakter olmalıdır.', 'error');
             return;
         }
 
@@ -193,7 +200,7 @@
         <div class="notes-list">
             <h2>Mevcut Notlar</h2>
             {#if loading}
-                <div class="loading">Yükleniyor...</div>
+                <div class="loading" role="status" aria-live="polite">Yükleniyor...</div>
             {:else if notes.length === 0}
                 <div class="empty-state">Henüz not eklenmemiş.</div>
             {:else}
@@ -309,13 +316,13 @@
 
     input:focus {
         outline: none;
-        border-color: #3182ce;
+        border-color: #14b8a6;
         box-shadow: 0 0 0 3px rgba(49, 130, 206, 0.1);
     }
 
     .add-btn {
         padding: 0.875rem 2rem;
-        background: linear-gradient(to right, #3182ce, #2c5282);
+        background: linear-gradient(to right, #0d9488, #115e59);
         color: white;
         border: none;
         border-radius: 8px;
@@ -325,7 +332,7 @@
     }
 
     .add-btn:hover {
-        background: linear-gradient(to right, #2c5282, #2a4365);
+        background: linear-gradient(to right, #115e59, #134e4a);
         transform: translateY(-1px);
     }
 
@@ -345,7 +352,7 @@
     }
 
     .note-item:hover {
-        border-color: #3182ce;
+        border-color: #14b8a6;
         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
     }
 

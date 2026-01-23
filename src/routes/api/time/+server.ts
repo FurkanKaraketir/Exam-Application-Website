@@ -15,18 +15,27 @@ export const GET: RequestHandler = async () => {
         }
     ];
 
+    let apiErrors = 0;
+
     for (const api of timeApis) {
         try {
+            // Add timeout to prevent hanging
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout
+
             const response = await fetch(api.url, {
                 method: 'GET',
                 headers: {
                     'Accept': 'application/json',
                     'Cache-Control': 'no-cache'
-                }
+                },
+                signal: controller.signal
             });
 
+            clearTimeout(timeoutId);
+
             if (!response.ok) {
-                console.warn(`${api.name} returned non-OK status`);
+                apiErrors++;
                 continue;
             }
 
@@ -43,7 +52,11 @@ export const GET: RequestHandler = async () => {
                 }
             });
         } catch (err) {
-            console.warn(`Error fetching time from ${api.name}:`, err);
+            apiErrors++;
+            // Only log if all APIs fail to reduce console noise
+            if (apiErrors === timeApis.length) {
+                console.warn('All time APIs failed, using system time as fallback');
+            }
         }
     }
 

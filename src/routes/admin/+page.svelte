@@ -77,6 +77,7 @@
     let originators: string[] = [];
     let error: string | null = null;
     let loading = true;
+    let isRefreshing = false;
     let isCustomSchool = false;
     let customSchoolName = '';
     let schoolList: string[] = [];
@@ -138,12 +139,14 @@
     }
 
     onMount(async () => {
+        loading = true;
         await Promise.all([
             loadApplications(),
             loadSchools(),
             loadSchoolList()
         ]);
         await loadCapacityStats();
+        loading = false;
     });
 
     async function loadSchools() {
@@ -154,9 +157,10 @@
                 id: doc.id,
                 name: doc.data().name
             }));
-            showNotification('Okullar başarıyla yüklendi.', 'success');
+            // Removed success notification to reduce spam on page load
         } catch (error) {
-            showNotification('Okullar yüklenirken bir hata oluştu.', 'error');
+            console.error('Error loading schools:', error);
+            showNotification('Okul listesi yüklenirken bir hata oluştu. Lütfen sayfayı yenileyin.', 'error');
         }
     }
 
@@ -304,9 +308,11 @@
 
             filterApplications();
             await loadCapacityStats();
-            showNotification('Başvurular başarıyla yüklendi.', 'success');
+            // Removed success notification to reduce spam on page load
         } catch (error) {
-            showNotification('Başvurular yüklenirken bir hata oluştu.', 'error');
+            console.error('Error loading applications:', error);
+            const errorMessage = error instanceof Error ? error.message : 'Bilinmeyen bir hata oluştu';
+            showNotification(`Başvurular yüklenirken bir hata oluştu: ${errorMessage}. Lütfen sayfayı yenileyin.`, 'error');
         }
     }
 
@@ -376,8 +382,19 @@
         if (!selectedApplication) return;
 
         // Validate TC number
-        if (!validateTCID(editFormData.tcId || '')) {
-            showNotification('Geçersiz T.C. Kimlik Numarası.', 'error');
+        if (!editFormData.tcId || editFormData.tcId.length !== 11) {
+            showNotification('T.C. Kimlik Numarası 11 haneli olmalıdır.', 'error');
+            return;
+        }
+
+        if (!validateTCID(editFormData.tcId)) {
+            showNotification('Geçersiz T.C. Kimlik Numarası. Lütfen geçerli bir T.C. Kimlik Numarası giriniz.', 'error');
+            return;
+        }
+
+        // Validate phone number
+        if (!editFormData.phoneNumber || editFormData.phoneNumber.length !== 10) {
+            showNotification('Telefon numarası 10 haneli olmalıdır.', 'error');
             return;
         }
 
@@ -545,9 +562,12 @@
             // Update local state
             applications = applications.filter(app => applicationToDelete && app.tcId !== applicationToDelete.tcId);
             filterApplications();
+            await loadCapacityStats(); // Refresh capacity stats
             showNotification('Başvuru başarıyla silindi.', 'success');
         } catch (error) {
-            showNotification('Başvuru silinirken bir hata oluştu.', 'error');
+            console.error('Error deleting application:', error);
+            const errorMessage = error instanceof Error ? error.message : 'Bilinmeyen bir hata oluştu';
+            showNotification(`Başvuru silinirken bir hata oluştu: ${errorMessage}`, 'error');
         } finally {
             isDeleteModalOpen = false;
             applicationToDelete = null;
@@ -557,6 +577,17 @@
     async function handleAddSchool() {
         if (!newSchoolName.trim()) {
             showNotification('Okul adı boş olamaz.', 'error');
+            return;
+        }
+
+        if (newSchoolName.trim().length < 3) {
+            showNotification('Okul adı en az 3 karakter olmalıdır.', 'error');
+            return;
+        }
+
+        // Check if school name already exists
+        if (schools.some(s => s.name.toLowerCase() === newSchoolName.trim().toLowerCase())) {
+            showNotification('Bu isimde bir okul zaten mevcut.', 'warning');
             return;
         }
 
@@ -575,7 +606,9 @@
             isAddSchoolModalOpen = false;
             await loadSchools();
         } catch (error) {
-            showNotification('Okul eklenirken bir hata oluştu.', 'error');
+            console.error('Error adding school:', error);
+            const errorMessage = error instanceof Error ? error.message : 'Bilinmeyen bir hata oluştu';
+            showNotification(`Okul eklenirken bir hata oluştu: ${errorMessage}`, 'error');
         }
     }
 
@@ -644,13 +677,17 @@
     async function loadSchoolList() {
         try {
             const response = await fetch('/schools.txt');
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
             const text = await response.text();
             schoolList = text.split('\n')
                 .map(line => line.trim())
                 .filter(line => line.length > 0)
                 .sort();
         } catch (error) {
-            showNotification('Okul listesi yüklenirken bir hata oluştu.', 'error');
+            console.error('Error loading school list:', error);
+            showNotification('Okul listesi dosyası bulunamadı. Özel okul girişi yapılabilir.', 'warning');
         }
     }
 
@@ -903,6 +940,16 @@
 </div>
 
 <main class="container">
+    {#if loading}
+        <div class="loading-overlay" role="status" aria-live="polite">
+            <div class="loading-spinner">
+                <div class="spinner" aria-hidden="true"></div>
+                <p>Veriler yükleniyor...</p>
+                <span class="sr-only">Başvurular yükleniyor, lütfen bekleyin...</span>
+            </div>
+        </div>
+    {/if}
+    
     <h1>Sınav Başvuruları</h1>
 
     <div class="stats-card">
@@ -976,9 +1023,18 @@
                     <span class="btn-icon">⚙️</span>
                     Sistem Ayarları
                 </a>
-                <button on:click={loadApplications} class="refresh-btn">
-                    <span class="btn-icon">🔄</span>
-                    Yenile
+                <button 
+                    on:click={async () => {
+                        isRefreshing = true;
+                        await loadApplications();
+                        isRefreshing = false;
+                        showNotification('Başvurular yenilendi.', 'success');
+                    }} 
+                    class="refresh-btn"
+                    disabled={isRefreshing}
+                >
+                    <span class="btn-icon">{isRefreshing ? '⏳' : '🔄'}</span>
+                    {isRefreshing ? 'Yenileniyor...' : 'Yenile'}
                 </button>
                 <button on:click={checkOrderNumbers} class="fix-btn">
                     <span class="btn-icon">🔧</span>
@@ -1478,12 +1534,12 @@
     }
 
     .stats-card {
-        background: linear-gradient(135deg, #3182ce, #2c5282);
+        background: linear-gradient(135deg, #0d9488, #115e59);
         border-radius: 16px;
         padding: 2rem;
         margin-bottom: 2rem;
         color: white;
-        box-shadow: 0 4px 15px rgba(49, 130, 206, 0.2);
+        box-shadow: 0 4px 15px rgba(13, 148, 136, 0.2);
         transition: transform 0.3s ease, box-shadow 0.3s ease;
         position: relative;
         overflow: hidden;
@@ -1502,7 +1558,7 @@
 
     .stats-card:hover {
         transform: translateY(-2px);
-        box-shadow: 0 8px 25px rgba(49, 130, 206, 0.3);
+        box-shadow: 0 8px 25px rgba(13, 148, 136, 0.3);
     }
 
     .stat-content {
@@ -1643,8 +1699,8 @@
 
     .search-input:focus {
         outline: none;
-        border-color: #3182ce;
-        box-shadow: 0 0 0 3px rgba(49, 130, 206, 0.1), 0 2px 12px rgba(0, 0, 0, 0.1);
+        border-color: #14b8a6;
+        box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.1), 0 2px 12px rgba(0, 0, 0, 0.1);
         background: #ffffff;
     }
 
@@ -1680,12 +1736,12 @@
 
     .primary-actions {
         position: relative;
-        background: linear-gradient(145deg, #ebf8ff, #bee3f8);
-        border-color: #90cdf4;
+        background: linear-gradient(145deg, #ccfbf1, #99f6e4);
+        border-color: #5eead4;
     }
 
     .primary-actions::before {
-        background: linear-gradient(to right, #3182ce, #2c5282);
+        background: linear-gradient(to right, #0d9488, #115e59);
     }
 
     .management-actions {
@@ -1739,12 +1795,12 @@
 
     /* Primary action buttons */
     .add-application-btn {
-        background: linear-gradient(135deg, #3182ce, #2c5282);
+        background: linear-gradient(135deg, #0d9488, #115e59);
         color: white;
     }
 
     .add-application-btn:hover {
-        background: linear-gradient(135deg, #2c5282, #2a4365);
+        background: linear-gradient(135deg, #115e59, #134e4a);
     }
 
     .excel-btn {
@@ -1795,12 +1851,12 @@
     }
 
     .refresh-btn {
-        background: linear-gradient(135deg, #4299e1, #3182ce);
+        background: linear-gradient(135deg, #14b8a6, #0d9488);
         color: white;
     }
 
     .refresh-btn:hover {
-        background: linear-gradient(135deg, #3182ce, #2c5282);
+        background: linear-gradient(135deg, #0d9488, #115e59);
     }
 
     .fix-btn {
@@ -1866,7 +1922,7 @@
 
     .sort-indicator {
         margin-left: 0.5rem;
-        color: #3182ce;
+        color: #14b8a6;
     }
 
     h1 {
@@ -1887,13 +1943,13 @@
         transform: translateX(-50%);
         width: 100px;
         height: 3px;
-        background: linear-gradient(to right, #3182ce, #2c5282);
+        background: linear-gradient(to right, #0d9488, #115e59);
         border-radius: 2px;
     }
 
     .edit-btn {
         padding: 0.5rem 1rem;
-        background: #3182ce;
+        background: #14b8a6;
         color: white;
         border: none;
         border-radius: 4px;
@@ -1903,7 +1959,7 @@
     }
 
     .edit-btn:hover {
-        background: #2c5282;
+        background: #0d9488;
     }
 
     .modal-overlay {
@@ -1958,8 +2014,8 @@
     .form-group input:focus,
     .form-group select:focus {
         outline: none;
-        border-color: #3182ce;
-        box-shadow: 0 0 0 3px rgba(49, 130, 206, 0.1);
+        border-color: #14b8a6;
+        box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.1);
     }
 
     .helper-text {
@@ -1997,15 +2053,15 @@
     }
 
     .save-btn {
-        background: linear-gradient(to right, #3182ce, #2c5282);
+        background: linear-gradient(to right, #0d9488, #115e59);
         color: white;
         border: none;
     }
 
     .save-btn:hover {
-        background: linear-gradient(to right, #2c5282, #2a4365);
+        background: linear-gradient(to right, #115e59, #134e4a);
         transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(49, 130, 206, 0.2);
+        box-shadow: 0 4px 12px rgba(13, 148, 136, 0.2);
     }
 
     .notifications {
@@ -2394,7 +2450,7 @@
 
     .add-application-btn {
         padding: 0.75rem 1.5rem;
-        background: linear-gradient(to right, #3182ce, #2c5282);
+        background: linear-gradient(to right, #0d9488, #115e59);
         color: white;
         border: none;
         border-radius: 8px;
@@ -2404,8 +2460,70 @@
     }
 
     .add-application-btn:hover {
-        background: linear-gradient(to right, #2c5282, #2a4365);
+        background: linear-gradient(to right, #115e59, #134e4a);
         transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(49, 130, 206, 0.2);
+        box-shadow: 0 4px 12px rgba(13, 148, 136, 0.2);
+    }
+
+    .loading-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(255, 255, 255, 0.95);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 9999;
+    }
+
+    .loading-spinner {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1rem;
+    }
+
+    .spinner {
+        width: 50px;
+        height: 50px;
+        border: 4px solid #e2e8f0;
+        border-top-color: #14b8a6;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+
+    .loading-spinner p {
+        color: #4a5568;
+        font-size: 1.1rem;
+        font-weight: 500;
+    }
+
+    button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+
+    button:disabled:hover {
+        transform: none;
+    }
+
+    .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border-width: 0;
     }
 </style> 

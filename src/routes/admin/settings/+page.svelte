@@ -46,8 +46,6 @@
     let isLoadingPastYears = true;
     let selectedFile: File | null = null;
     let isUploadingResults = false;
-    let isSettingsModalOpen = false;
-    let editingSettings: SystemSettings = { ...settings };
 
     // Notifications system
     type NotificationType = 'success' | 'error' | 'warning' | 'info';
@@ -106,8 +104,7 @@
                     lastUpdated: new Date()
                 });
             }
-            editingSettings = { ...settings };
-            showNotification('Sistem ayarları yüklendi.', 'success');
+            // Removed success notification to reduce spam on page load
         } catch (error) {
             console.error('Error loading settings:', error);
             showNotification('Sistem ayarları yüklenirken hata oluştu.', 'error');
@@ -127,7 +124,7 @@
                 ...doc.data()
             } as PastYear)).sort((a, b) => b.year - a.year);
             
-            showNotification('Geçmiş yıllar yüklendi.', 'success');
+            // Removed success notification to reduce spam on page load
         } catch (error) {
             console.error('Error loading past years:', error);
             showNotification('Geçmiş yıllar yüklenirken hata oluştu.', 'error');
@@ -137,15 +134,40 @@
     }
 
     async function saveSettings() {
+        // Validate dates
+        if (settings.examDate && settings.applicationDeadline) {
+            const examDate = new Date(settings.examDate);
+            const deadlineDate = new Date(settings.applicationDeadline);
+            
+            if (examDate <= deadlineDate) {
+                showNotification('Sınav tarihi, başvuru son tarihinden sonra olmalıdır.', 'error');
+                return;
+            }
+        }
+
+        if (settings.resultsReleaseDate && settings.examDate) {
+            const resultsDate = new Date(settings.resultsReleaseDate);
+            const examDate = new Date(settings.examDate);
+            
+            if (resultsDate <= examDate) {
+                showNotification('Sonuç açıklama tarihi, sınav tarihinden sonra olmalıdır.', 'error');
+                return;
+            }
+        }
+
+        // Validate current year
+        if (settings.currentYear < 2025 || settings.currentYear > 2030) {
+            showNotification('Geçerli bir yıl giriniz (2025-2030).', 'error');
+            return;
+        }
+
         try {
             const settingsRef = doc(db, "system", "settings");
             await setDoc(settingsRef, {
-                ...editingSettings,
+                ...settings,
                 lastUpdated: new Date()
             });
             
-            settings = { ...editingSettings };
-            isSettingsModalOpen = false;
             showNotification('Sistem ayarları başarıyla kaydedildi.', 'success');
         } catch (error) {
             console.error('Error saving settings:', error);
@@ -153,56 +175,48 @@
         }
     }
 
-    async function toggleApplication() {
-        try {
-            const newState = !settings.applicationEnabled;
-            const settingsRef = doc(db, "system", "settings");
-            await updateDoc(settingsRef, {
-                applicationEnabled: newState,
-                lastUpdated: new Date()
-            });
-            
-            settings.applicationEnabled = newState;
-            showNotification(
-                `Başvuru sistemi ${newState ? 'açıldı' : 'kapatıldı'}.`, 
-                newState ? 'success' : 'warning'
-            );
-        } catch (error) {
-            console.error('Error toggling application:', error);
-            showNotification('Başvuru sistemi durumu değiştirilemedi.', 'error');
-        }
-    }
-
-    async function toggleResults() {
-        try {
-            const newState = !settings.resultsEnabled;
-            const settingsRef = doc(db, "system", "settings");
-            await updateDoc(settingsRef, {
-                resultsEnabled: newState,
-                lastUpdated: new Date()
-            });
-            
-            settings.resultsEnabled = newState;
-            showNotification(
-                `Sonuç sistemi ${newState ? 'açıldı' : 'kapatıldı'}.`, 
-                newState ? 'success' : 'warning'
-            );
-        } catch (error) {
-            console.error('Error toggling results:', error);
-            showNotification('Sonuç sistemi durumu değiştirilemedi.', 'error');
-        }
-    }
 
     async function changePhase(newPhase: 'application' | 'exam' | 'results' | 'completed') {
         try {
+            // Automatically set system states based on phase
+            let applicationEnabled = false;
+            let resultsEnabled = false;
+            
+            switch (newPhase) {
+                case 'application':
+                    applicationEnabled = true;
+                    break;
+                case 'exam':
+                    // Both systems disabled during exam
+                    break;
+                case 'results':
+                    resultsEnabled = true;
+                    break;
+                case 'completed':
+                    // Both systems disabled when completed
+                    break;
+            }
+            
             const settingsRef = doc(db, "system", "settings");
             await updateDoc(settingsRef, {
                 currentPhase: newPhase,
+                applicationEnabled,
+                resultsEnabled,
                 lastUpdated: new Date()
             });
             
             settings.currentPhase = newPhase;
-            showNotification(`Sistem aşaması "${newPhase}" olarak değiştirildi.`, 'success');
+            settings.applicationEnabled = applicationEnabled;
+            settings.resultsEnabled = resultsEnabled;
+            
+            const phaseNames = {
+                'application': 'Başvuru Dönemi',
+                'exam': 'Sınav Dönemi',
+                'results': 'Sonuç Dönemi',
+                'completed': 'Tamamlandı'
+            };
+            
+            showNotification(`Sistem "${phaseNames[newPhase]}" aşamasına alındı.`, 'success');
         } catch (error) {
             console.error('Error changing phase:', error);
             showNotification('Sistem aşaması değiştirilemedi.', 'error');
@@ -257,6 +271,11 @@
     }
 
     async function archiveCurrentYear() {
+        // Confirmation dialog
+        if (!confirm(`${settings.currentYear} yılını arşivlemek ve yeni yıl için sistemi sıfırlamak istediğinizden emin misiniz? Bu işlem geri alınamaz!`)) {
+            return;
+        }
+
         try {
             // Get current year statistics
             const applicationsRef = collection(db, "examApplications");
@@ -300,6 +319,30 @@
             const pastYearRef = doc(db, "pastYears", settings.currentYear.toString());
             await setDoc(pastYearRef, pastYearData);
 
+            // Delete all applications from current year
+            const deletionPromises: Promise<void>[] = [];
+            applicationsSnap.forEach(appDoc => {
+                deletionPromises.push(deleteDoc(appDoc.ref));
+            });
+            await Promise.all(deletionPromises);
+
+            // Clear student assignments from all exam halls
+            const hallCleanupPromises: Promise<void>[] = [];
+            for (const schoolDoc of schoolsSnap.docs) {
+                const hallsRef = collection(db, "schools", schoolDoc.id, "examHalls");
+                const hallsSnap = await getDocs(hallsRef);
+                
+                for (const hallDoc of hallsSnap.docs) {
+                    const studentsRef = collection(db, "schools", schoolDoc.id, "examHalls", hallDoc.id, "students");
+                    const studentsSnap = await getDocs(studentsRef);
+                    
+                    studentsSnap.forEach(studentDoc => {
+                        hallCleanupPromises.push(deleteDoc(studentDoc.ref));
+                    });
+                }
+            }
+            await Promise.all(hallCleanupPromises);
+
             // Update settings for new year
             const newYear = settings.currentYear + 1;
             const settingsRef = doc(db, "system", "settings");
@@ -333,7 +376,7 @@
     }
 
     async function deletePastYear(year: number) {
-        if (!confirm(`${year} yılına ait tüm verileri silmek istediğinizden emin misiniz?`)) {
+        if (!confirm(`${year} yılına ait tüm verileri kalıcı olarak silmek istediğinizden emin misiniz?\n\nBu işlem geri alınamaz!`)) {
             return;
         }
 
@@ -349,14 +392,9 @@
         }
     }
 
-    function openSettingsModal() {
-        editingSettings = { ...settings };
-        isSettingsModalOpen = true;
-    }
-
     function getPhaseColor(phase: string): string {
         switch (phase) {
-            case 'application': return '#3182ce';
+            case 'application': return '#14b8a6';
             case 'exam': return '#d69e2e';
             case 'results': return '#38a169';
             case 'completed': return '#805ad5';
@@ -422,56 +460,138 @@
             </div>
         </div>
 
-        <div class="quick-actions">
-            <button 
-                class="toggle-btn {settings.applicationEnabled ? 'enabled' : 'disabled'}"
-                on:click={toggleApplication}
-            >
-                {settings.applicationEnabled ? '🟢' : '🔴'} Başvuru Sistemi
-            </button>
+        <div class="status-info">
+            <div class="status-item">
+                <span class="status-icon">{settings.applicationEnabled ? '🟢' : '🔴'}</span>
+                <span class="status-text">Başvuru Sistemi {settings.applicationEnabled ? 'Aktif' : 'Kapalı'}</span>
+            </div>
             
+            <div class="status-item">
+                <span class="status-icon">{settings.resultsEnabled ? '🟢' : '🔴'}</span>
+                <span class="status-text">Sonuç Sistemi {settings.resultsEnabled ? 'Aktif' : 'Kapalı'}</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- System Phase Control -->
+    <div class="phase-control-card">
+        <h3>
+            <span class="section-icon">🔄</span>
+            Sistem Aşaması Yönetimi
+        </h3>
+        <p class="phase-description">
+            Sistem aşamasını seçin. Aşama otomatik olarak ilgili sistemleri etkinleştirir veya kapatır.
+        </p>
+        <div class="phase-buttons">
             <button 
-                class="toggle-btn {settings.resultsEnabled ? 'enabled' : 'disabled'}"
-                on:click={toggleResults}
+                type="button"
+                class="phase-btn {settings.currentPhase === 'application' ? 'active' : ''}"
+                on:click={() => changePhase('application')}
             >
-                {settings.resultsEnabled ? '🟢' : '🔴'} Sonuç Sistemi
+                <span class="phase-emoji">📝</span>
+                <span class="phase-name">Başvuru Dönemi</span>
+                <span class="phase-hint">Başvurular açık</span>
             </button>
-            
-            <button class="settings-btn" on:click={openSettingsModal}>
-                ⚙️ Detaylı Ayarlar
+            <button 
+                type="button"
+                class="phase-btn {settings.currentPhase === 'exam' ? 'active' : ''}"
+                on:click={() => changePhase('exam')}
+            >
+                <span class="phase-emoji">📊</span>
+                <span class="phase-name">Sınav Dönemi</span>
+                <span class="phase-hint">Sınav devam ediyor</span>
+            </button>
+            <button 
+                type="button"
+                class="phase-btn {settings.currentPhase === 'results' ? 'active' : ''}"
+                on:click={() => changePhase('results')}
+            >
+                <span class="phase-emoji">📋</span>
+                <span class="phase-name">Sonuç Dönemi</span>
+                <span class="phase-hint">Sonuçlar açık</span>
+            </button>
+            <button 
+                type="button"
+                class="phase-btn {settings.currentPhase === 'completed' ? 'active' : ''}"
+                on:click={() => changePhase('completed')}
+            >
+                <span class="phase-emoji">✅</span>
+                <span class="phase-name">Tamamlandı</span>
+                <span class="phase-hint">Süreç bitti</span>
             </button>
         </div>
     </div>
 
-    <!-- Phase Management -->
-    <div class="phase-management">
-        <h3>Sistem Aşaması Yönetimi</h3>
-        <div class="phase-buttons">
-            <button 
-                class="phase-btn {settings.currentPhase === 'application' ? 'active' : ''}"
-                on:click={() => changePhase('application')}
-            >
-                📝 Başvuru Dönemi
-            </button>
-            <button 
-                class="phase-btn {settings.currentPhase === 'exam' ? 'active' : ''}"
-                on:click={() => changePhase('exam')}
-            >
-                📊 Sınav Dönemi
-            </button>
-            <button 
-                class="phase-btn {settings.currentPhase === 'results' ? 'active' : ''}"
-                on:click={() => changePhase('results')}
-            >
-                📋 Sonuç Dönemi
-            </button>
-            <button 
-                class="phase-btn {settings.currentPhase === 'completed' ? 'active' : ''}"
-                on:click={() => changePhase('completed')}
-            >
-                ✅ Tamamlandı
-            </button>
-        </div>
+    <!-- System Settings Configuration -->
+    <div class="settings-configuration">
+        <h3>Tarih ve Yıl Ayarları</h3>
+        
+        <form on:submit|preventDefault={saveSettings}>
+            <div class="settings-grid">
+                <div class="form-group">
+                    <label for="applicationDeadline">
+                        <span class="label-icon">📅</span>
+                        Başvuru Son Tarihi
+                    </label>
+                    <input
+                        type="datetime-local"
+                        id="applicationDeadline"
+                        bind:value={settings.applicationDeadline}
+                        required
+                    />
+                    <small class="helper-text">Öğrencilerin başvuru yapabileceği son tarih</small>
+                </div>
+                
+                <div class="form-group">
+                    <label for="examDate">
+                        <span class="label-icon">📊</span>
+                        Sınav Tarihi
+                    </label>
+                    <input
+                        type="datetime-local"
+                        id="examDate"
+                        bind:value={settings.examDate}
+                        required
+                    />
+                    <small class="helper-text">Başvuru son tarihinden sonra olmalıdır</small>
+                </div>
+                
+                <div class="form-group">
+                    <label for="resultsReleaseDate">
+                        <span class="label-icon">📋</span>
+                        Sonuç Açıklama Tarihi
+                    </label>
+                    <input
+                        type="datetime-local"
+                        id="resultsReleaseDate"
+                        bind:value={settings.resultsReleaseDate}
+                        required
+                    />
+                    <small class="helper-text">Sınav tarihinden sonra olmalıdır</small>
+                </div>
+                
+                <div class="form-group">
+                    <label for="currentYear">
+                        <span class="label-icon">🗓️</span>
+                        Mevcut Yıl
+                    </label>
+                    <input
+                        type="number"
+                        id="currentYear"
+                        bind:value={settings.currentYear}
+                        min="2025"
+                        max="2030"
+                    />
+                    <small class="helper-text">Eğitim-öğretim yılı</small>
+                </div>
+            </div>
+            
+            <div class="form-actions">
+                <button type="submit" class="save-settings-btn">
+                    💾 Tarih Ayarlarını Kaydet
+                </button>
+            </div>
+        </form>
     </div>
 
     <!-- Results File Management -->
@@ -531,7 +651,7 @@
         <h3>Geçmiş Yıllar</h3>
         
         {#if isLoadingPastYears}
-            <div class="loading">Geçmiş yıllar yükleniyor...</div>
+            <div class="loading" role="status" aria-live="polite">Geçmiş yıllar yükleniyor...</div>
         {:else if pastYears.length === 0}
             <div class="empty-state">
                 <span class="empty-icon">📚</span>
@@ -589,84 +709,6 @@
     </div>
 </main>
 
-<!-- Settings Modal -->
-{#if isSettingsModalOpen}
-    <div class="modal-overlay" on:click={() => isSettingsModalOpen = false}>
-        <div class="modal" on:click|stopPropagation>
-            <h2>Sistem Ayarları</h2>
-            
-            <form on:submit|preventDefault={saveSettings}>
-                <div class="form-group">
-                    <label for="applicationDeadline">Başvuru Son Tarihi:</label>
-                    <input
-                        type="datetime-local"
-                        id="applicationDeadline"
-                        bind:value={editingSettings.applicationDeadline}
-                    />
-                </div>
-                
-                <div class="form-group">
-                    <label for="examDate">Sınav Tarihi:</label>
-                    <input
-                        type="datetime-local"
-                        id="examDate"
-                        bind:value={editingSettings.examDate}
-                    />
-                </div>
-                
-                <div class="form-group">
-                    <label for="resultsReleaseDate">Sonuç Açıklama Tarihi:</label>
-                    <input
-                        type="datetime-local"
-                        id="resultsReleaseDate"
-                        bind:value={editingSettings.resultsReleaseDate}
-                    />
-                </div>
-                
-                <div class="form-group">
-                    <label for="currentYear">Mevcut Yıl:</label>
-                    <input
-                        type="number"
-                        id="currentYear"
-                        bind:value={editingSettings.currentYear}
-                        min="2025"
-                        max="2030"
-                    />
-                </div>
-                
-                <div class="form-group checkbox-group">
-                    <label class="checkbox-label">
-                        <input
-                            type="checkbox"
-                            bind:checked={editingSettings.applicationEnabled}
-                        />
-                        <span class="checkbox-text">Başvuru sistemini etkinleştir</span>
-                    </label>
-                </div>
-                
-                <div class="form-group checkbox-group">
-                    <label class="checkbox-label">
-                        <input
-                            type="checkbox"
-                            bind:checked={editingSettings.resultsEnabled}
-                        />
-                        <span class="checkbox-text">Sonuç sistemini etkinleştir</span>
-                    </label>
-                </div>
-                
-                <div class="modal-actions">
-                    <button type="button" class="cancel-btn" on:click={() => isSettingsModalOpen = false}>
-                        İptal
-                    </button>
-                    <button type="submit" class="save-btn">
-                        Kaydet
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
-{/if}
-
 <style>
     .container {
         max-width: 1200px;
@@ -692,12 +734,12 @@
         transform: translateX(-50%);
         width: 120px;
         height: 3px;
-        background: linear-gradient(to right, #3182ce, #2c5282);
+        background: linear-gradient(to right, #0d9488, #115e59);
         border-radius: 2px;
     }
 
     .current-year-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(135deg, #0d9488 0%, #115e59 100%);
         border-radius: 16px;
         padding: 2rem;
         margin-bottom: 2rem;
@@ -739,55 +781,58 @@
         letter-spacing: 0.5px;
     }
 
-    .quick-actions {
+    .status-info {
         display: flex;
-        gap: 1rem;
+        gap: 2rem;
         flex-wrap: wrap;
     }
 
-    .toggle-btn {
-        padding: 0.75rem 1.5rem;
-        border: none;
-        border-radius: 25px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.3s ease;
+    .status-item {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.5rem 1rem;
         background: rgba(255, 255, 255, 0.1);
+        border-radius: 20px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    .status-icon {
+        font-size: 1.2rem;
+    }
+
+    .status-text {
         color: white;
-        border: 1px solid rgba(255, 255, 255, 0.3);
+        font-weight: 500;
+        font-size: 0.95rem;
     }
 
-    .toggle-btn:hover {
-        background: rgba(255, 255, 255, 0.2);
-        transform: translateY(-2px);
-    }
-
-    .toggle-btn.enabled {
-        background: rgba(72, 187, 120, 0.3);
-        border-color: rgba(72, 187, 120, 0.5);
-    }
-
-    .toggle-btn.disabled {
-        background: rgba(245, 101, 101, 0.3);
-        border-color: rgba(245, 101, 101, 0.5);
-    }
-
-    .settings-btn {
-        padding: 0.75rem 1.5rem;
-        border: none;
-        border-radius: 25px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        background: rgba(255, 255, 255, 0.9);
-        color: #2d3748;
-    }
-
-    .settings-btn:hover {
+    .phase-control-card {
         background: white;
-        transform: translateY(-2px);
+        border-radius: 12px;
+        padding: 2rem;
+        margin-bottom: 2rem;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+        border: 2px solid #14b8a6;
     }
 
+    .phase-control-card h3 {
+        color: #2d3748;
+        margin-bottom: 0.75rem;
+        font-size: 1.5rem;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .phase-description {
+        color: #718096;
+        margin-bottom: 1.5rem;
+        font-size: 0.95rem;
+    }
+
+    .settings-configuration,
     .phase-management,
     .results-management,
     .year-management,
@@ -800,6 +845,7 @@
         border: 1px solid #e2e8f0;
     }
 
+    .settings-configuration h3,
     .phase-management h3,
     .results-management h3,
     .year-management h3,
@@ -811,32 +857,58 @@
     }
 
     .phase-buttons {
-        display: flex;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
         gap: 1rem;
-        flex-wrap: wrap;
     }
 
     .phase-btn {
-        padding: 1rem 1.5rem;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 1.5rem 1rem;
         border: 2px solid #e2e8f0;
         border-radius: 12px;
         background: white;
-        color: #4a5568;
-        font-weight: 600;
         cursor: pointer;
         transition: all 0.3s ease;
     }
 
+    .phase-emoji {
+        font-size: 2.5rem;
+        display: block;
+    }
+
+    .phase-name {
+        color: #2d3748;
+        font-weight: 700;
+        font-size: 1rem;
+        text-align: center;
+    }
+
+    .phase-hint {
+        color: #718096;
+        font-size: 0.85rem;
+        text-align: center;
+    }
+
     .phase-btn:hover {
-        border-color: #3182ce;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(49, 130, 206, 0.2);
+        border-color: #14b8a6;
+        background: #f7fafc;
+        transform: translateY(-4px);
+        box-shadow: 0 8px 20px rgba(49, 130, 206, 0.15);
     }
 
     .phase-btn.active {
-        background: #3182ce;
+        background: linear-gradient(135deg, #0d9488 0%, #115e59 100%);
+        border-color: #115e59;
+        box-shadow: 0 8px 25px rgba(49, 130, 206, 0.4);
+    }
+
+    .phase-btn.active .phase-name,
+    .phase-btn.active .phase-hint {
         color: white;
-        border-color: #3182ce;
     }
 
     .upload-section {
@@ -875,13 +947,13 @@
     }
 
     .file-label:hover {
-        border-color: #3182ce;
+        border-color: #14b8a6;
         background: #ebf8ff;
     }
 
     .upload-btn {
         padding: 1rem 2rem;
-        background: linear-gradient(to right, #3182ce, #2c5282);
+        background: linear-gradient(to right, #0d9488, #115e59);
         color: white;
         border: none;
         border-radius: 8px;
@@ -892,7 +964,7 @@
     }
 
     .upload-btn:hover:not(:disabled) {
-        background: linear-gradient(to right, #2c5282, #2a4365);
+        background: linear-gradient(to right, #115e59, #134e4a);
         transform: translateY(-1px);
         box-shadow: 0 4px 12px rgba(49, 130, 206, 0.2);
     }
@@ -1050,33 +1122,45 @@
         color: #38a169;
     }
 
-    .modal-overlay {
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: rgba(0, 0, 0, 0.5);
+    .settings-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 1.5rem;
+        margin-bottom: 2rem;
+    }
+
+    .label-icon {
+        font-size: 1.1rem;
+        margin-right: 0.5rem;
+    }
+
+    .section-icon {
+        font-size: 1.3rem;
+    }
+
+    .form-actions {
         display: flex;
         justify-content: center;
-        align-items: center;
-        z-index: 1000;
+        margin-top: 1rem;
     }
 
-    .modal {
-        background: white;
-        padding: 2rem;
+    .save-settings-btn {
+        padding: 1rem 3rem;
+        background: linear-gradient(to right, #38a169, #2f855a);
+        color: white;
+        border: none;
         border-radius: 12px;
-        width: 90%;
-        max-width: 500px;
-        max-height: 90vh;
-        overflow-y: auto;
+        font-weight: 700;
+        font-size: 1.1rem;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 12px rgba(56, 161, 105, 0.3);
     }
 
-    .modal h2 {
-        margin-bottom: 1.5rem;
-        color: #2d3748;
-        text-align: center;
+    .save-settings-btn:hover {
+        background: linear-gradient(to right, #2f855a, #276749);
+        transform: translateY(-2px);
+        box-shadow: 0 6px 16px rgba(56, 161, 105, 0.4);
     }
 
     .form-group {
@@ -1088,6 +1172,8 @@
         margin-bottom: 0.5rem;
         font-weight: 600;
         color: #2d3748;
+        display: flex;
+        align-items: center;
     }
 
     .form-group input {
@@ -1097,74 +1183,14 @@
         border-radius: 8px;
         font-size: 1rem;
         background-color: #f8fafc;
+        transition: all 0.2s ease;
     }
 
     .form-group input:focus {
         outline: none;
-        border-color: #3182ce;
+        border-color: #14b8a6;
         box-shadow: 0 0 0 3px rgba(49, 130, 206, 0.1);
         background-color: #ffffff;
-    }
-
-    .checkbox-group {
-        display: flex;
-        align-items: center;
-    }
-
-    .checkbox-label {
-        display: flex;
-        align-items: center;
-        gap: 0.75rem;
-        cursor: pointer;
-        margin-bottom: 0;
-    }
-
-    .checkbox-label input[type="checkbox"] {
-        width: auto;
-        margin: 0;
-    }
-
-    .checkbox-text {
-        color: #2d3748;
-        font-weight: 500;
-    }
-
-    .modal-actions {
-        display: flex;
-        gap: 1rem;
-        justify-content: flex-end;
-        margin-top: 2rem;
-    }
-
-    .cancel-btn,
-    .save-btn {
-        padding: 0.75rem 1.5rem;
-        border-radius: 8px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.3s ease;
-    }
-
-    .cancel-btn {
-        background: #e2e8f0;
-        color: #2d3748;
-        border: none;
-    }
-
-    .cancel-btn:hover {
-        background: #cbd5e0;
-    }
-
-    .save-btn {
-        background: linear-gradient(to right, #3182ce, #2c5282);
-        color: white;
-        border: none;
-    }
-
-    .save-btn:hover {
-        background: linear-gradient(to right, #2c5282, #2a4365);
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(49, 130, 206, 0.2);
     }
 
     .notifications {
@@ -1208,7 +1234,7 @@
     }
 
     .notification.info {
-        border-left: 4px solid #4299e1;
+        border-left: 4px solid #14b8a6;
     }
 
     .notification-content {
@@ -1249,7 +1275,7 @@
     }
 
     .info .icon {
-        background: #4299e1;
+        background: #14b8a6;
         color: white;
     }
 
@@ -1274,6 +1300,14 @@
         opacity: 1;
     }
 
+    .helper-text {
+        display: block;
+        color: #718096;
+        font-size: 0.875rem;
+        margin-top: 0.5rem;
+        padding-left: 0.25rem;
+    }
+
     @media (max-width: 768px) {
         .container {
             padding: 1rem;
@@ -1289,9 +1323,26 @@
             text-align: center;
         }
 
-        .quick-actions,
-        .phase-buttons {
+        .status-info {
             flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .phase-buttons {
+            grid-template-columns: 1fr;
+            gap: 0.75rem;
+        }
+
+        .phase-btn {
+            padding: 1.25rem 1rem;
+        }
+
+        .phase-emoji {
+            font-size: 2rem;
+        }
+
+        .settings-grid {
+            grid-template-columns: 1fr;
         }
 
         .upload-section {
@@ -1318,11 +1369,6 @@
             right: 10px;
             left: 10px;
             max-width: none;
-        }
-
-        .modal {
-            width: 95%;
-            padding: 1.5rem;
         }
     }
 </style> 
