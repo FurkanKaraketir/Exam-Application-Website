@@ -12,6 +12,7 @@
         resultsReleaseDate: string;
         applicationEnabled: boolean;
         resultsEnabled: boolean;
+        eventsEnabled: boolean;
         currentYear: number;
         currentPhase: 'application' | 'exam' | 'results' | 'completed';
         resultsFileUrl?: string;
@@ -38,6 +39,7 @@
         resultsReleaseDate: '',
         applicationEnabled: false,
         resultsEnabled: false,
+        eventsEnabled: true,
         currentYear: 2026,
         currentPhase: 'application',
         lastUpdated: new Date()
@@ -95,6 +97,7 @@
                     resultsReleaseDate: data.resultsReleaseDate || '',
                     applicationEnabled: data.applicationEnabled || false,
                     resultsEnabled: data.resultsEnabled || false,
+                    eventsEnabled: data.eventsEnabled !== false,
                     currentYear: data.currentYear || 2026,
                     currentPhase: data.currentPhase || 'application',
                     resultsFileUrl: data.resultsFileUrl || '',
@@ -368,6 +371,7 @@
                 resultsFileUrl: '',
                 applicationEnabled: false,
                 resultsEnabled: false,
+                eventsEnabled: settings.eventsEnabled,
                 lastUpdated: new Date()
             });
 
@@ -422,6 +426,21 @@
             case 'results': return '📋';
             case 'completed': return '✅';
             default: return '❓';
+        }
+    }
+
+    async function toggleEventsEnabled() {
+        try {
+            const newValue = !settings.eventsEnabled;
+            const settingsRef = doc(db, "system", "settings");
+            await updateDoc(settingsRef, {
+                eventsEnabled: newValue,
+                lastUpdated: new Date()
+            });
+            settings.eventsEnabled = newValue;
+            showNotification(newValue ? 'Etkinlik başvurusu butonu açıldı.' : 'Etkinlik başvurusu butonu kapatıldı.', 'success');
+        } catch (error) {
+            showNotification('Ayar güncellenirken hata oluştu.', 'error');
         }
     }
 </script>
@@ -492,6 +511,21 @@
                 <span class="status-text">
                     Sonuç Sistemi: <strong>{settings.resultsEnabled ? 'Aktif — Sonuçlar görüntülenebilir' : 'Kapalı — Sonuçlar gizli'}</strong>
                 </span>
+            </div>
+
+            <div class="status-item status-item-toggle">
+                <span class="status-icon">{settings.eventsEnabled ? '🟢' : '🔴'}</span>
+                <span class="status-text">
+                    Etkinlik Başvurusu: <strong>{settings.eventsEnabled ? 'Aktif — Ana sayfada buton görünür' : 'Kapalı — Buton gizli'}</strong>
+                </span>
+                <button
+                    type="button"
+                    class="toggle-btn"
+                    on:click={toggleEventsEnabled}
+                    title={settings.eventsEnabled ? 'Kapat' : 'Aç'}
+                >
+                    {settings.eventsEnabled ? 'Kapat' : 'Aç'}
+                </button>
             </div>
         </div>
     </div>
@@ -848,6 +882,27 @@
         color: white;
         font-weight: 500;
         font-size: 0.95rem;
+    }
+
+    .status-item-toggle {
+        flex-wrap: wrap;
+    }
+
+    .toggle-btn {
+        margin-left: auto;
+        padding: 0.35rem 0.75rem;
+        font-size: 0.85rem;
+        font-weight: 600;
+        background: rgba(255, 255, 255, 0.25);
+        color: white;
+        border: 1px solid rgba(255, 255, 255, 0.4);
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .toggle-btn:hover {
+        background: rgba(255, 255, 255, 0.35);
     }
 
     .phase-control-card {

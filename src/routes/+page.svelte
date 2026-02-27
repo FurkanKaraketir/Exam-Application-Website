@@ -16,6 +16,7 @@
         resultsReleaseDate: string;
         applicationEnabled: boolean;
         resultsEnabled: boolean;
+        eventsEnabled: boolean;
         currentYear: number;
         currentPhase: 'application' | 'exam' | 'results' | 'completed';
         resultsFileUrl?: string;
@@ -303,6 +304,7 @@
                     resultsReleaseDate: data.resultsReleaseDate || '',
                     applicationEnabled: data.applicationEnabled || false,
                     resultsEnabled: data.resultsEnabled || false,
+                    eventsEnabled: data.eventsEnabled !== false,
                     currentYear: data.currentYear || 2026,
                     currentPhase: data.currentPhase || 'application',
                     resultsFileUrl: data.resultsFileUrl || '',
@@ -324,6 +326,7 @@
                     resultsReleaseDate: '',
                     applicationEnabled: false,
                     resultsEnabled: false,
+                    eventsEnabled: true,
                     currentYear: 2026,
                     currentPhase: 'application',
                     lastUpdated: new Date()
@@ -1217,6 +1220,13 @@
                     <span class="icon">📄</span>
                     Sınav Giriş Belgesi
                 </a>
+                
+                {#if systemSettings?.eventsEnabled !== false}
+                    <a href="/events" class="action-btn">
+                        <span class="icon">📅</span>
+                        Etkinlik Başvurusu
+                    </a>
+                {/if}
             </div>
         </div>
     </div>
