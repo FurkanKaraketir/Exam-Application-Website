@@ -1,5 +1,6 @@
 <script lang="ts">
     import { db } from '$lib/firebase';
+    import { getBarcodeBase64 } from '$lib/barcode';
     import { collection, doc, getDoc, setDoc, getDocs, deleteDoc, updateDoc } from 'firebase/firestore';
     import { fade, fly } from 'svelte/transition';
     import { onMount } from 'svelte';
@@ -9,6 +10,7 @@
     
     // System settings interface
     interface SystemSettings {
+        applicationStartDate: string;
         applicationDeadline: string;
         examDate: string;
         resultsReleaseDate: string;
@@ -20,15 +22,56 @@
         lastUpdated: Date;
     }
 
+    import { onDestroy } from 'svelte';
+
     // Load system settings
     let systemSettings: SystemSettings | null = null;
     let isLoadingSettings = true;
     
     // Remove hardcoded values and use dynamic settings
+    let applicationStartDate: Date | null = null;
     let applicationDeadline: Date | null = null;
     let examDate: Date | null = null;
     let isApplicationEnabled = false;
     let currentPhase: string = 'application';
+
+    // Countdown timer
+    interface CountdownTime { days: number; hours: number; minutes: number; seconds: number; }
+    let startCountdownValue: CountdownTime = { days: 0, hours: 0, minutes: 0, seconds: 0 };
+    let deadlineCountdownValue: CountdownTime = { days: 0, hours: 0, minutes: 0, seconds: 0 };
+    let countdownInterval: ReturnType<typeof setInterval> | null = null;
+
+    function calcCountdown(target: Date): CountdownTime {
+        const diff = target.getTime() - Date.now();
+        if (diff <= 0) return { days: 0, hours: 0, minutes: 0, seconds: 0 };
+        return {
+            days:    Math.floor(diff / 86_400_000),
+            hours:   Math.floor((diff % 86_400_000) / 3_600_000),
+            minutes: Math.floor((diff % 3_600_000)  / 60_000),
+            seconds: Math.floor((diff % 60_000)      / 1_000)
+        };
+    }
+
+    function tickCountdowns() {
+        if (applicationStartDate) startCountdownValue = calcCountdown(applicationStartDate);
+        if (applicationDeadline)  deadlineCountdownValue = calcCountdown(applicationDeadline);
+    }
+
+    // Reactive: true while the application start date is still in the future
+    $: startDateInFuture = applicationStartDate !== null && (
+        startCountdownValue.days > 0 ||
+        startCountdownValue.hours > 0 ||
+        startCountdownValue.minutes > 0 ||
+        startCountdownValue.seconds > 0
+    );
+
+    function startCountdownTimer() {
+        if (countdownInterval) clearInterval(countdownInterval);
+        tickCountdowns();
+        countdownInterval = setInterval(tickCountdowns, 1000);
+    }
+
+    onDestroy(() => { if (countdownInterval) clearInterval(countdownInterval); });
     
     // Check if capacity is full
     let isCapacityFull = false;
@@ -62,6 +105,9 @@
     let customSchoolName = '';
     let notes: string[] = [];
 
+    type SubmitState = 'idle' | 'submitting' | 'success' | 'error';
+    let submitState: SubmitState = 'idle';
+
     function toTurkishUpperCase(str: string): string {
         return str.replace('i', 'İ')
                  .replace('ı', 'I')
@@ -78,7 +124,135 @@
         formData[field] = toTurkishUpperCase(input.value);
     }
 
-    let schools: string[] = [];
+    const schools: string[] = [
+        'NEVŞEHİR - ACIGÖL - Acıgöl 4 Temmuz İlkokulu',
+        'NEVŞEHİR - ACIGÖL - Acıgöl Atatürk İlkokulu',
+        'NEVŞEHİR - ACIGÖL - Ağıllı İlkokulu',
+        'NEVŞEHİR - ACIGÖL - İnallı İlkokulu',
+        'NEVŞEHİR - ACIGÖL - Karacaören Cumhuriyet İlkokulu',
+        'NEVŞEHİR - ACIGÖL - Karacaören Şehit Yunus Yılmaz İlkokulu',
+        'NEVŞEHİR - ACIGÖL - Karapınar Esentepe İlkokulu',
+        'NEVŞEHİR - ACIGÖL - Karapınar İlkokulu',
+        'NEVŞEHİR - ACIGÖL - Kozluca İlkokulu',
+        'NEVŞEHİR - ACIGÖL - Kurugöl 70.Yıl İlkokulu',
+        'NEVŞEHİR - ACIGÖL - M.Zeki Hanoğlu İlkokulu',
+        'NEVŞEHİR - ACIGÖL - Tatlarin Şehit Ahmet Tekdemir İlkokulu',
+        'NEVŞEHİR - ACIGÖL - Tepeköy İlkokulu',
+        'NEVŞEHİR - ACIGÖL - Topaç Şehit Bekir Şahin İlkokulu',
+        'NEVŞEHİR - AVANOS - Akarca İlkokulu',
+        'NEVŞEHİR - AVANOS - Alaettin İlkokulu',
+        'NEVŞEHİR - AVANOS - Avanos Cumhuriyet İlkokulu',
+        'NEVŞEHİR - AVANOS - Ayhanlar İlkokulu',
+        'NEVŞEHİR - AVANOS - Bahçelievler 100.Yıl İlkokulu',
+        'NEVŞEHİR - AVANOS - Bozca İlkokulu',
+        'NEVŞEHİR - AVANOS - Çalış İlkokulu',
+        'NEVŞEHİR - AVANOS - Göynük İlkokulu',
+        'NEVŞEHİR - AVANOS - Kalaba Atatürk İlkokulu',
+        'NEVŞEHİR - AVANOS - Kalaba Meliha Hamdi Köroğlu İlkokulu',
+        'NEVŞEHİR - AVANOS - Kalaba Yunus Emre İlkokulu',
+        'NEVŞEHİR - AVANOS - Mahmat Şehit Murat Koç İlkokulu',
+        'NEVŞEHİR - AVANOS - Nazife Mustafa Ergün İlkokulu',
+        'NEVŞEHİR - AVANOS - Özkonak Mareşal Fevzi Çakmak İlkokulu',
+        'NEVŞEHİR - AVANOS - Paşalı Şehit Hasan Güven İlkokulu',
+        'NEVŞEHİR - AVANOS - Sarılar İlkokulu',
+        'NEVŞEHİR - AVANOS - Şehit Ömer Halisdemir İlkokulu',
+        'NEVŞEHİR - AVANOS - Topaklı İlkokulu',
+        'NEVŞEHİR - AVANOS - ÜÇKUYU İLKOKULU',
+        'NEVŞEHİR - DERİNKUYU - Çakıllı Şehit Kasım Poyraz İlkokulu',
+        'NEVŞEHİR - DERİNKUYU - Derinkuyu 15 Temmuz Şehitleri İlkokulu',
+        'NEVŞEHİR - DERİNKUYU - Derinkuyu 24 Kasım İlkokulu',
+        'NEVŞEHİR - DERİNKUYU - Derinkuyu Atatürk İlkokulu',
+        'NEVŞEHİR - DERİNKUYU - Derinkuyu Cumhuriyet İlkokulu',
+        'NEVŞEHİR - DERİNKUYU - Doğala İlkokulu',
+        'NEVŞEHİR - DERİNKUYU - Güneyce İlkokulu',
+        'NEVŞEHİR - DERİNKUYU - Kuyulutatlar Şehit Erhan Karataş İlkokulu',
+        'NEVŞEHİR - DERİNKUYU - Özlüce İlkokulu',
+        'NEVŞEHİR - DERİNKUYU - Suvermez İlkokulu',
+        'NEVŞEHİR - DERİNKUYU - Til İlkokulu',
+        'NEVŞEHİR - DERİNKUYU - Yazıhüyük Gazi İlkokulu',
+        'NEVŞEHİR - DERİNKUYU - YAZIHÜYÜK MUHSİN YAZICIOĞLU İLKOKULU',
+        'NEVŞEHİR - GÜLŞEHİR - Abuşağı İlkokulu',
+        'NEVŞEHİR - GÜLŞEHİR - Emmiler İlkokulu',
+        'NEVŞEHİR - GÜLŞEHİR - Gökçetoprak İlkokulu',
+        'NEVŞEHİR - GÜLŞEHİR - Gülşehir Atatürk İlkokulu',
+        'NEVŞEHİR - GÜLŞEHİR - Hacıhalilli İlkokulu',
+        'NEVŞEHİR - GÜLŞEHİR - Karacaşar İlkokulu',
+        'NEVŞEHİR - GÜLŞEHİR - Karavezir İlkokulu',
+        'NEVŞEHİR - GÜLŞEHİR - Kızılkaya İlkokulu',
+        'NEVŞEHİR - GÜLŞEHİR - Ovaören İlkokulu',
+        'NEVŞEHİR - GÜLŞEHİR - Sevim Erdoğan Öz İlkokulu',
+        'NEVŞEHİR - GÜLŞEHİR - Terlemez İlkokulu',
+        'NEVŞEHİR - GÜLŞEHİR - Tuzköy İlkokulu',
+        'NEVŞEHİR - GÜLŞEHİR - Yakatarla İlkokulu',
+        'NEVŞEHİR - GÜLŞEHİR - Yeniyaylacık İlkokulu',
+        'NEVŞEHİR - GÜLŞEHİR - Yeşilöz İlkokulu',
+        'NEVŞEHİR - HACIBEKTAŞ - Hacıbektaş Atatürk İlkokulu',
+        'NEVŞEHİR - HACIBEKTAŞ - HASANLAR İLKOKULU',
+        'NEVŞEHİR - HACIBEKTAŞ - Karaburna İlkokulu',
+        'NEVŞEHİR - HACIBEKTAŞ - KAYAALTI İLKOKULU',
+        'NEVŞEHİR - HACIBEKTAŞ - Kızılağıl İlkokulu',
+        'NEVŞEHİR - KOZAKLI - Akpınar İlkokulu',
+        'NEVŞEHİR - KOZAKLI - Çayiçi Yunus Emre İlkokulu',
+        'NEVŞEHİR - KOZAKLI - Kozaklı Atatürk İlkokulu',
+        'NEVŞEHİR - KOZAKLI - Kozaklı Mehmet Akif Ersoy İlkokulu',
+        'NEVŞEHİR - KOZAKLI - Kozaklı Şehit Şenol Coşkun İlkokulu',
+        'NEVŞEHİR - MERKEZ - 100. Yıl Cumhuriyet İlkokulu',
+        'NEVŞEHİR - MERKEZ - 100.Yıl Ülfet Başer İlkokulu',
+        'NEVŞEHİR - MERKEZ - 19 Mayıs İlkokulu',
+        'NEVŞEHİR - MERKEZ - 20 Temmuz İlkokulu',
+        'NEVŞEHİR - MERKEZ - 30 Ağustos İlkokulu',
+        'NEVŞEHİR - MERKEZ - 75.Yıl İlkokulu',
+        'NEVŞEHİR - MERKEZ - Abdülhamit Han İlkokulu',
+        'NEVŞEHİR - MERKEZ - Alacaşar Şehit Cebrail Aksöz İlkokulu',
+        'NEVŞEHİR - MERKEZ - Balcın İlkokulu',
+        'NEVŞEHİR - MERKEZ - Boğaz Şehit Sait Toktaş İlkokulu',
+        'NEVŞEHİR - MERKEZ - Çardak İlkokulu',
+        'NEVŞEHİR - MERKEZ - Çat İlkokulu',
+        'NEVŞEHİR - MERKEZ - Çiftlik 100.Yıl İlkokulu',
+        'NEVŞEHİR - MERKEZ - Ersular İlkokulu',
+        'NEVŞEHİR - MERKEZ - Göre Şehit Emre Fıstıkeken İlkokulu',
+        'NEVŞEHİR - MERKEZ - Göreme İlkokulu',
+        'NEVŞEHİR - MERKEZ - Güvercinlik İlkokulu',
+        'NEVŞEHİR - MERKEZ - Güzelyurt Turgut Akdevelioğlu İlkokulu',
+        'NEVŞEHİR - MERKEZ - Hacı Asım Atabilen İlkokulu',
+        'NEVŞEHİR - MERKEZ - Hacı Mustafa- Türkan Öbekli İlkokulu',
+        'NEVŞEHİR - MERKEZ - İcik Şehit Cevdet Şimşek İlkokulu',
+        'NEVŞEHİR - MERKEZ - İncekaralar İlkokulu',
+        'NEVŞEHİR - MERKEZ - Kaymaklı İlkokulu',
+        'NEVŞEHİR - MERKEZ - Mehmet Gülen İlkokulu',
+        'NEVŞEHİR - MERKEZ - Mustafa Çalışkan İlkokulu',
+        'NEVŞEHİR - MERKEZ - Nar Barbaros İlkokulu',
+        'NEVŞEHİR - MERKEZ - Necip Fazıl Kısakürek İlkokulu',
+        'NEVŞEHİR - MERKEZ - Nevşehir Atatürk İlkokulu',
+        'NEVŞEHİR - MERKEZ - Nevşehir Cumhuriyet İlkokulu',
+        'NEVŞEHİR - MERKEZ - Özyayla İlkokulu',
+        'NEVŞEHİR - MERKEZ - Rauf Nail Akman İlkokulu',
+        'NEVŞEHİR - MERKEZ - Recep Tayyip Erdoğan İlkokulu',
+        'NEVŞEHİR - MERKEZ - Sultan Alparslan İlkokulu',
+        'NEVŞEHİR - MERKEZ - Sulusaray İlkokulu',
+        'NEVŞEHİR - MERKEZ - Uçhisar Haydar Çankaya İlkokulu',
+        'NEVŞEHİR - MERKEZ - Yunus Emre İlkokulu',
+        'NEVŞEHİR - ÜRGÜP - Ayhan Ertürk İlkokulu',
+        'NEVŞEHİR - ÜRGÜP - Ayvalı İlkokulu',
+        'NEVŞEHİR - ÜRGÜP - Bahçeli İlkokulu',
+        'NEVŞEHİR - ÜRGÜP - Başdere İlkokulu',
+        'NEVŞEHİR - ÜRGÜP - Hanife Memiş Aksoy İlkokulu',
+        'NEVŞEHİR - ÜRGÜP - İbrahimpaşa İlkokulu',
+        'NEVŞEHİR - ÜRGÜP - Mazı İlkokulu',
+        'NEVŞEHİR - ÜRGÜP - Mehmet Dinler İlkokulu',
+        'NEVŞEHİR - ÜRGÜP - Mustafapaşa İlkokulu',
+        'NEVŞEHİR - ÜRGÜP - Ortahisar Fatih İlkokulu',
+        'NEVŞEHİR - ÜRGÜP - Ortahisar İlkokulu',
+        'NEVŞEHİR - ÜRGÜP - Şahinefendi İlkokulu',
+        'NEVŞEHİR - ÜRGÜP - Sarıhıdır İlkokulu',
+        'NEVŞEHİR - ÜRGÜP - Sofular İlkokulu',
+        'NEVŞEHİR - ÜRGÜP - Türkan Diker İlkokulu',
+        'NEVŞEHİR - ÜRGÜP - Ürgüp 15 Temmuz İlkokulu',
+        'ÖZEL Altınyıldız İlkokulu',
+        'ÖZEL Kardelen İlkokulu',
+        'ÖZEL MBA İlkokulu',
+        'ÖZEL Simya İlkokulu'
+    ];
     let notificationId = 0;
     let downloadButton: HTMLButtonElement;
 
@@ -111,7 +285,6 @@
             console.error('Error checking capacity:', error);
         }
         
-        await loadSchools();
         await loadNotes();
     });
 
@@ -124,22 +297,25 @@
             if (settingsSnap.exists()) {
                 const data = settingsSnap.data();
                 systemSettings = {
+                    applicationStartDate: data.applicationStartDate || '',
                     applicationDeadline: data.applicationDeadline || '',
                     examDate: data.examDate || '',
                     resultsReleaseDate: data.resultsReleaseDate || '',
                     applicationEnabled: data.applicationEnabled || false,
                     resultsEnabled: data.resultsEnabled || false,
-                    currentYear: data.currentYear || 2025,
+                    currentYear: data.currentYear || 2026,
                     currentPhase: data.currentPhase || 'application',
                     resultsFileUrl: data.resultsFileUrl || '',
                     lastUpdated: data.lastUpdated?.toDate() || new Date()
                 };
                 
                 // Update local variables
+                applicationStartDate = systemSettings.applicationStartDate ? new Date(systemSettings.applicationStartDate) : null;
                 applicationDeadline = systemSettings.applicationDeadline ? new Date(systemSettings.applicationDeadline) : null;
                 examDate = systemSettings.examDate ? new Date(systemSettings.examDate) : null;
                 isApplicationEnabled = systemSettings.applicationEnabled;
                 currentPhase = systemSettings.currentPhase;
+                startCountdownTimer();
             } else {
                 // Create default settings if they don't exist
                 const defaultSettings = {
@@ -148,7 +324,7 @@
                     resultsReleaseDate: '',
                     applicationEnabled: false,
                     resultsEnabled: false,
-                    currentYear: 2025,
+                    currentYear: 2026,
                     currentPhase: 'application',
                     lastUpdated: new Date()
                 };
@@ -160,19 +336,6 @@
             console.error('Error loading system settings:', error);
         } finally {
             isLoadingSettings = false;
-        }
-    }
-
-    async function loadSchools() {
-        try {
-            const response = await fetch('/schools.txt');
-            const text = await response.text();
-            schools = text.split('\n')
-                .map(line => line.trim())
-                .filter(line => line.length > 0)
-                .sort();
-        } catch (error) {
-            showNotification('Okul listesi yüklenirken bir hata oluştu.', 'error');
         }
     }
 
@@ -354,6 +517,27 @@
             return;
         }
 
+        // Explicit validation to prevent saving incomplete data
+        if (!formData.studentFullName?.trim()) {
+            showNotification('Öğrenci adı soyadı gereklidir.', 'error');
+            return;
+        }
+        if (!formData.parentFullName?.trim()) {
+            showNotification('Veli adı soyadı gereklidir.', 'error');
+            return;
+        }
+        const phoneDigits = (formData.phoneNumber || '').replace(/\D/g, '');
+        if (phoneDigits.length !== 10 || !phoneDigits.startsWith('5')) {
+            showNotification('Geçerli bir 10 haneli cep telefonu numarası giriniz.', 'error');
+            return;
+        }
+        if (!formData.schoolName?.trim()) {
+            showNotification('Okul seçiniz.', 'error');
+            return;
+        }
+
+        submitState = 'submitting';
+
         try {
             // Check if document already exists
             const docRef = doc(db, "examApplications", formData.tcId);
@@ -361,11 +545,20 @@
             
             if (docSnap.exists()) {
                 showNotification('Bu TC Kimlik numarası ile daha önce başvuru yapılmış. Sınav giriş belgenizi alabilirsiniz.', 'warning');
+                submitState = 'idle';
                 return;
             }
 
-            // Create new document with TC ID as document ID
-            await setDoc(docRef, formData);
+            // Create new document with TC ID as document ID (use phone digits, ensure studentSchoolName)
+            const docData = {
+                tcId: formData.tcId,
+                studentFullName: formData.studentFullName.trim(),
+                schoolName: formData.schoolName.trim(),
+                studentSchoolName: formData.schoolName.trim(),
+                parentFullName: formData.parentFullName.trim(),
+                phoneNumber: phoneDigits
+            };
+            await setDoc(docRef, docData);
 
             // Get all schools
             const schoolsSnapshot = await getDocs(collection(db, "schools"));
@@ -378,32 +571,47 @@
 
             // Fisher-Yates shuffle algorithm
             function shuffle<T>(array: T[]): T[] {
-                let currentIndex = array.length;
+                const arr = [...array];
+                let currentIndex = arr.length;
                 let randomIndex;
 
                 while (currentIndex !== 0) {
                     randomIndex = Math.floor(Math.random() * currentIndex);
                     currentIndex--;
 
-                    [array[currentIndex], array[randomIndex]] = 
-                    [array[randomIndex], array[currentIndex]];
+                    [arr[currentIndex], arr[randomIndex]] = 
+                    [arr[randomIndex], arr[currentIndex]];
                 }
 
-                return array;
+                return arr;
             }
 
             let assigned = false;
-            let capacityIncrease = 0;
             let assignedSchool;
             let assignedHall;
             let assignedSchoolId;
             let assignedHallId;
 
-            // Get and shuffle all schools
-            const shuffledSchools = shuffle([...schools]);
+            // Sort by weight (higher first), then shuffle same-weight groups randomly
+            const schoolsWithWeight = schools.map(d => ({
+                doc: d,
+                weight: d.data().weight ?? 0
+            }));
+            schoolsWithWeight.sort((a, b) => b.weight - a.weight);
 
-            // Try each school in shuffled order
-            for (const school of shuffledSchools) {
+            const orderedSchools: typeof schools = [];
+            let i = 0;
+            while (i < schoolsWithWeight.length) {
+                const currentWeight = schoolsWithWeight[i].weight;
+                const sameWeightGroup = schoolsWithWeight
+                    .filter(s => s.weight === currentWeight)
+                    .map(s => s.doc);
+                orderedSchools.push(...shuffle(sameWeightGroup));
+                i += sameWeightGroup.length;
+            }
+
+            // Try each school in priority order
+            for (const school of orderedSchools) {
                 if (assigned) break;
 
                 // Get all exam halls for this school
@@ -423,8 +631,8 @@
                     // Get current students in this hall
                     const studentsSnapshot = await getDocs(collection(db, "schools", school.id, "examHalls", hall.id, "students"));
                     
-                    // Check if hall has capacity (with potential increase)
-                    if (studentsSnapshot.size < (hallData.capacity + capacityIncrease)) {
+                    // Check if hall has capacity
+                    if (studentsSnapshot.size < hallData.capacity) {
                         // Add student to this hall
                         await setDoc(doc(db, "schools", school.id, "examHalls", hall.id, "students", formData.tcId), {
                             tcId: formData.tcId,
@@ -461,68 +669,16 @@
                 }
             }
 
-            // If no assignment was possible with current capacity, try with increased capacity
-            if (!assigned && capacityIncrease === 0) {
-                capacityIncrease = 5;
-                // Retry the entire process with increased capacity
-                for (const school of shuffledSchools) {
-                    if (assigned) break;
-
-                    const examHallsSnapshot = await getDocs(collection(db, "schools", school.id, "examHalls"));
-                    const examHalls = examHallsSnapshot.docs;
-
-                    if (examHalls.length === 0) continue;
-
-                    const shuffledHalls = shuffle([...examHalls]);
-
-                    for (const hall of shuffledHalls) {
-                        const hallData = hall.data();
-                        const studentsSnapshot = await getDocs(collection(db, "schools", school.id, "examHalls", hall.id, "students"));
-                        
-                        if (studentsSnapshot.size < (hallData.capacity + capacityIncrease)) {
-                            await setDoc(doc(db, "schools", school.id, "examHalls", hall.id, "students", formData.tcId), {
-                                tcId: formData.tcId,
-                                studentFullName: formData.studentFullName,
-                                schoolId: school.id,
-                                schoolName: school.data().name,
-                                studentSchoolName: formData.schoolName,
-                                parentFullName: formData.parentFullName,
-                                phoneNumber: formData.phoneNumber,
-                                hallName: hallData.name,
-                                hallId: hall.id,
-                                assignedAt: new Date(),
-                                orderNumber: studentsSnapshot.size + 1
-                            });
-
-                            await updateDoc(docRef, {
-                                studentSchoolName: formData.schoolName,
-                                schoolName: school.data().name,
-                                hallName: hallData.name,
-                                schoolId: school.id,
-                                hallId: hall.id,
-                                assignedAt: new Date(),
-                                orderNumber: studentsSnapshot.size + 1
-                            });
-                            
-                            assigned = true;
-                            assignedSchool = school.data().name;
-                            assignedHall = hallData.name;
-                            assignedSchoolId = school.id;
-                            assignedHallId = hall.id;
-                            break;
-                        }
-                    }
-                }
-            }
-
             if (!assigned) {
                 showNotification('Sınav yeri ataması yapılamadı. Lütfen daha sonra tekrar deneyiniz.', 'error');
-                // Delete the application since we couldn't assign a hall
                 await deleteDoc(docRef);
+                submitState = 'error';
+                setTimeout(() => { submitState = 'idle'; }, 3000);
                 return;
             }
 
             showNotification('Başvurunuz başarıyla gönderildi ve sınav yeriniz atandı!', 'success');
+            submitState = 'success';
 
             // Show exam entry document section
             if (!assignedSchoolId || !assignedHallId) {
@@ -565,10 +721,12 @@
             };
         } catch (error) {
             showNotification('Başvuru gönderilirken bir hata oluştu. Lütfen tekrar deneyiniz.', 'error');
+            submitState = 'error';
+            setTimeout(() => { submitState = 'idle'; }, 3000);
         }
     }
 
-    function downloadExamDocument() {
+    async function downloadExamDocument() {
         if (!examData) return;
 
         // Create new PDF document
@@ -656,7 +814,7 @@
         
         doc.setFontSize(11);
         const examInfo = [
-            ["Sınav Tarihi", ":", "19.04.2025"],
+            ["Sınav Tarihi", ":", "18.04.2026"],
             ["Sınav Binası", ":", examData.schoolName],
             ["Sınav Salonu", ":", examData.hallName],
             ["Sıra No", ":", examData.orderNumber.toString()]
@@ -702,8 +860,11 @@
         });
         
         const qr_location = 160;
-        // Add QR code for school location
-        doc.addImage(`/${examData.schoolId}.png`, 'PNG', 155, qr_location, 30, 30);
+        // Add QR code for school location (from admin-managed barcode or static fallback)
+        const barcodeBase64 = await getBarcodeBase64(examData.schoolId);
+        if (barcodeBase64) {
+            doc.addImage(barcodeBase64, 'PNG', 155, qr_location, 30, 30);
+        }
         doc.setFontSize(10);
         doc.setFont("DejaVuSans", "bold");
         doc.setTextColor(0, 51, 102);
@@ -749,7 +910,7 @@
 <main class="container">
     <div class="content-wrapper">
         <div class="form-column">
-            <h1>Recep Tayyip Erdoğan Proje İmam Hatip Lisesi <br> {systemSettings?.currentYear || 2025}. Sınıf Kayıt Kabul Sınavı</h1>
+            <h1>Recep Tayyip Erdoğan Proje İmam Hatip Lisesi <br> {systemSettings?.currentYear || 2026}. Sınıf Kayıt Kabul Sınavı</h1>
             
             {#if isLoadingSettings}
                 <div class="loading-banner">
@@ -757,19 +918,45 @@
                     <h2>Sistem Bilgileri Yükleniyor...</h2>
                     <p>Lütfen bekleyiniz.</p>
                 </div>
-            {:else if currentPhase === 'application' && isApplicationEnabled}
+            {:else if currentPhase === 'application' && isApplicationEnabled && !startDateInFuture}
                 <!-- Application Form -->
                 <div class="application-banner">
                     <span class="application-icon">📝</span>
                     <h2>Başvuru Dönemi Açıktır</h2>
                     {#if applicationDeadline}
-                        <p>Son başvuru tarihi: {applicationDeadline.toLocaleDateString('tr-TR', { 
+                        <p class="deadline-date">Son başvuru: {applicationDeadline.toLocaleDateString('tr-TR', { 
                             year: 'numeric', 
                             month: 'long', 
                             day: 'numeric',
                             hour: '2-digit',
                             minute: '2-digit'
                         })}</p>
+                        {#if deadlineCountdownValue.days > 0 || deadlineCountdownValue.hours > 0 || deadlineCountdownValue.minutes > 0}
+                            <div class="deadline-countdown">
+                                <span class="deadline-countdown-label">⏰ Başvurular kapanıyor:</span>
+                                <div class="countdown-units small">
+                                    <div class="countdown-unit">
+                                        <span class="unit-value">{deadlineCountdownValue.days}</span>
+                                        <span class="unit-label">gün</span>
+                                    </div>
+                                    <span class="countdown-sep">:</span>
+                                    <div class="countdown-unit">
+                                        <span class="unit-value">{String(deadlineCountdownValue.hours).padStart(2,'0')}</span>
+                                        <span class="unit-label">saat</span>
+                                    </div>
+                                    <span class="countdown-sep">:</span>
+                                    <div class="countdown-unit">
+                                        <span class="unit-value">{String(deadlineCountdownValue.minutes).padStart(2,'0')}</span>
+                                        <span class="unit-label">dakika</span>
+                                    </div>
+                                    <span class="countdown-sep">:</span>
+                                    <div class="countdown-unit">
+                                        <span class="unit-value">{String(deadlineCountdownValue.seconds).padStart(2,'0')}</span>
+                                        <span class="unit-label">saniye</span>
+                                    </div>
+                                </div>
+                            </div>
+                        {/if}
                     {/if}
                 </div>
                 
@@ -798,6 +985,7 @@
                         <input
                             type="text"
                             id="studentFullName"
+                            bind:value={formData.studentFullName}
                             on:input={(e) => handleNameInput(e, 'studentFullName')}
                             placeholder="Öğrenci Adı Soyadı"
                             required
@@ -809,6 +997,7 @@
                         <input
                             type="text"
                             id="parentFullName"
+                            bind:value={formData.parentFullName}
                             on:input={(e) => handleNameInput(e, 'parentFullName')}
                             placeholder="Veli Adı Soyadı"
                             required
@@ -861,10 +1050,37 @@
                         </div>
                     </div>
 
-                    <button type="submit" class="submit-btn">
-                        Başvurumu Gönder
+                    <button
+                        type="submit"
+                        class="submit-btn"
+                        class:submitting={submitState === 'submitting'}
+                        class:success={submitState === 'success'}
+                        class:error={submitState === 'error'}
+                        disabled={submitState === 'submitting' || submitState === 'error'}
+                    >
+                        {#if submitState === 'submitting'}
+                            <span class="btn-spinner" aria-hidden="true"></span>
+                            Gönderiliyor...
+                        {:else if submitState === 'success'}
+                            ✓ Başvuru Gönderildi
+                        {:else if submitState === 'error'}
+                            ✕ Bir Hata Oluştu
+                        {:else}
+                            Başvurumu Gönder
+                        {/if}
                     </button>
                 </form>
+
+                {#if submitState === 'success'}
+                    <div class="success-notice" transition:fade>
+                        <span class="success-notice-icon">ℹ️</span>
+                        <div class="success-notice-text">
+                            <strong>Önemli Hatırlatma</strong>
+                            <p>Sınava girebilmek için <strong>Sınav Giriş Belgenizi</strong> indirip çıktı almanız gerekmektedir.</p>
+                            <a href="/sinav-giris-belgesi" class="notice-link">Sınav Giriş Belgesini Al →</a>
+                        </div>
+                    </div>
+                {/if}
 
                 {#if examData}
                     <div class="exam-info" transition:fade>
@@ -915,7 +1131,8 @@
                             minute: '2-digit'
                         })}</p>
                     {/if}
-                    <p>Başvurular tamamlanmıştır. Sınav giriş belgenizi alabilirsiniz.</p>
+                    <p>Başvurular tamamlanmıştır. Sınava girebilmek için sınav giriş belgenizi indirip çıktı almanız gerekmektedir.</p>
+                    <a href="/sinav-giris-belgesi" class="exam-entry-link">Sınav Giriş Belgesini Al →</a>
                 </div>
                 
             {:else if currentPhase === 'results'}
@@ -932,6 +1149,51 @@
                     <p>Sınav süreci tamamlanmıştır. Sonuçlar açıklanmıştır.</p>
                 </div>
                 
+            {:else if currentPhase === 'application' && startDateInFuture}
+                <!-- Countdown to application opening -->
+                <div class="countdown-banner">
+                    <span class="countdown-icon">🗓️</span>
+                    <h2>Başvurular Yakında Açılıyor</h2>
+                    <p class="countdown-open-date">
+                        Başvurular <strong>{applicationStartDate?.toLocaleDateString('tr-TR', {
+                            year: 'numeric',
+                            month: 'long',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                        })}</strong> tarihinde açılacaktır.
+                    </p>
+                    <div class="countdown-units">
+                        <div class="countdown-unit">
+                            <span class="unit-value">{startCountdownValue.days}</span>
+                            <span class="unit-label">Gün</span>
+                        </div>
+                        <span class="countdown-sep">:</span>
+                        <div class="countdown-unit">
+                            <span class="unit-value">{String(startCountdownValue.hours).padStart(2,'0')}</span>
+                            <span class="unit-label">Saat</span>
+                        </div>
+                        <span class="countdown-sep">:</span>
+                        <div class="countdown-unit">
+                            <span class="unit-value">{String(startCountdownValue.minutes).padStart(2,'0')}</span>
+                            <span class="unit-label">Dakika</span>
+                        </div>
+                        <span class="countdown-sep">:</span>
+                        <div class="countdown-unit">
+                            <span class="unit-value">{String(startCountdownValue.seconds).padStart(2,'0')}</span>
+                            <span class="unit-label">Saniye</span>
+                        </div>
+                    </div>
+                    {#if applicationDeadline}
+                        <p class="countdown-deadline-hint">
+                            Son başvuru tarihi: {applicationDeadline.toLocaleDateString('tr-TR', {
+                                year: 'numeric', month: 'long', day: 'numeric',
+                                hour: '2-digit', minute: '2-digit'
+                            })}
+                        </p>
+                    {/if}
+                </div>
+
             {:else}
                 <div class="inactive-banner">
                     <span class="inactive-icon">⏸️</span>
@@ -951,12 +1213,10 @@
                     </a>
                 {/if}
                 
-                {#if currentPhase !== 'application' || !isApplicationEnabled}
-                    <a href="/sinav-giris-belgesi" class="action-btn">
-                        <span class="icon">📄</span>
-                        Sınav Giriş Belgesi
-                    </a>
-                {/if}
+                <a href="/sinav-giris-belgesi" class="action-btn">
+                    <span class="icon">📄</span>
+                    Sınav Giriş Belgesi
+                </a>
             </div>
         </div>
     </div>
@@ -1063,9 +1323,42 @@
     }
     
     .submit-btn:disabled {
-        background: #cbd5e0;
         cursor: not-allowed;
         box-shadow: none;
+        transform: none;
+    }
+
+    .submit-btn.submitting {
+        background: linear-gradient(135deg, #0d9488 0%, #115e59 100%);
+        opacity: 0.85;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.6rem;
+    }
+
+    .submit-btn.success {
+        background: linear-gradient(135deg, #38a169 0%, #276749 100%);
+        box-shadow: 0 4px 15px rgba(56, 161, 105, 0.4);
+    }
+
+    .submit-btn.error {
+        background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%);
+        box-shadow: 0 4px 15px rgba(229, 62, 62, 0.4);
+    }
+
+    .btn-spinner {
+        width: 16px;
+        height: 16px;
+        border: 2px solid rgba(255, 255, 255, 0.4);
+        border-top-color: white;
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+        flex-shrink: 0;
+    }
+
+    @keyframes spin {
+        to { transform: rotate(360deg); }
     }
     
     h1 {
@@ -1205,9 +1498,23 @@
         .exam-banner,
         .results-banner,
         .completed-banner,
-        .inactive-banner {
+        .inactive-banner,
+        .countdown-banner {
             padding: 1.5rem;
             margin: 1rem 0 1.5rem;
+        }
+
+        .countdown-units {
+            gap: 0.35rem;
+        }
+
+        .countdown-unit {
+            min-width: 56px;
+            padding: 0.6rem 0.875rem;
+        }
+
+        .unit-value {
+            font-size: 1.75rem;
         }
         
         .exam-info {
@@ -1217,6 +1524,172 @@
         .info-grid {
             padding: 1.25rem;
             gap: 1rem;
+        }
+
+        .action-buttons {
+            position: static;
+        }
+    }
+
+    @media (max-width: 480px) {
+        .container {
+            margin: 0;
+            padding: 0.875rem;
+            border-radius: 0;
+            box-shadow: none;
+        }
+
+        h1 {
+            font-size: 1.05rem;
+            margin-bottom: 1.25rem;
+            padding-bottom: 1rem;
+        }
+
+        h1::after {
+            width: 60px;
+            height: 3px;
+        }
+
+        .form {
+            padding: 0.875rem;
+            gap: 0.875rem;
+        }
+
+        input, select {
+            padding: 0.75rem;
+            font-size: 0.95rem;
+        }
+
+        label {
+            font-size: 0.9rem;
+        }
+
+        .submit-btn,
+        .download-btn {
+            padding: 0.875rem 1.25rem;
+            font-size: 0.9rem;
+        }
+
+        .loading-banner,
+        .application-banner,
+        .exam-banner,
+        .results-banner,
+        .completed-banner,
+        .inactive-banner,
+        .countdown-banner {
+            padding: 1.25rem 0.875rem;
+            margin: 0.75rem 0 1.25rem;
+        }
+
+        .loading-banner h2,
+        .application-banner h2,
+        .exam-banner h2,
+        .results-banner h2,
+        .completed-banner h2,
+        .inactive-banner h2 {
+            font-size: 1.3rem;
+        }
+
+        .countdown-banner h2 {
+            font-size: 1.3rem;
+        }
+
+        .loading-banner p,
+        .application-banner p,
+        .exam-banner p,
+        .results-banner p,
+        .completed-banner p,
+        .inactive-banner p {
+            font-size: 0.9rem;
+        }
+
+        .loading-icon,
+        .application-icon,
+        .exam-icon,
+        .results-icon,
+        .completed-icon,
+        .inactive-icon,
+        .countdown-icon {
+            font-size: 2rem;
+        }
+
+        .countdown-units {
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 0.25rem;
+        }
+
+        .countdown-unit {
+            min-width: 52px;
+            padding: 0.5rem 0.6rem;
+        }
+
+        .unit-value {
+            font-size: 1.5rem;
+        }
+
+        .countdown-sep {
+            font-size: 1.35rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .action-btn {
+            padding: 1rem;
+            font-size: 0.95rem;
+        }
+
+        .action-btn .icon {
+            font-size: 1.35rem;
+        }
+
+        .capacity-banner {
+            padding: 1.25rem 0.875rem;
+        }
+
+        .capacity-banner h2 {
+            font-size: 1.3rem;
+        }
+
+        .capacity-banner p {
+            font-size: 0.9rem;
+        }
+
+        .capacity-icon {
+            font-size: 2.25rem;
+        }
+
+        .exam-info {
+            padding: 1rem;
+            margin-top: 1.25rem;
+        }
+
+        .info-grid {
+            padding: 0.875rem;
+            gap: 0.75rem;
+        }
+
+        .deadline-countdown {
+            padding: 0.6rem 0.875rem;
+        }
+
+        .countdown-units.small .countdown-unit {
+            padding: 0.4rem 0.6rem;
+            min-width: 44px;
+        }
+
+        .countdown-units.small .unit-value {
+            font-size: 1.15rem;
+        }
+
+        .notifications {
+            top: 6px;
+            right: 6px;
+            left: 6px;
+        }
+
+        .notification {
+            padding: 12px 14px;
+            font-size: 0.85rem;
         }
     }
 
@@ -1763,7 +2236,8 @@
     .exam-banner,
     .results-banner,
     .completed-banner,
-    .inactive-banner {
+    .inactive-banner,
+    .countdown-banner {
         padding: 2rem;
         margin: 1.5rem 0 2rem;
         display: flex;
@@ -1782,7 +2256,8 @@
     .exam-banner:hover,
     .results-banner:hover,
     .completed-banner:hover,
-    .inactive-banner:hover {
+    .inactive-banner:hover,
+    .countdown-banner:hover {
         transform: translateY(-2px);
         box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
     }
@@ -1815,6 +2290,183 @@
     .inactive-banner {
         background: linear-gradient(to right, #f7fafc, #edf2f7);
         border: 2px solid #a0aec0;
+    }
+
+    .success-notice {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.875rem;
+        background: linear-gradient(to right, #fffbeb, #fef9c3);
+        border: 2px solid #f59e0b;
+        border-radius: 10px;
+        padding: 1rem 1.25rem;
+        margin-top: 1rem;
+    }
+
+    .success-notice-icon {
+        font-size: 1.4rem;
+        flex-shrink: 0;
+        margin-top: 0.1rem;
+    }
+
+    .success-notice-text {
+        display: flex;
+        flex-direction: column;
+        gap: 0.3rem;
+    }
+
+    .success-notice-text strong {
+        color: #92400e;
+        font-size: 0.95rem;
+    }
+
+    .success-notice-text p {
+        color: #78350f;
+        font-size: 0.9rem;
+        margin: 0;
+    }
+
+    .notice-link, .exam-entry-link {
+        display: inline-block;
+        margin-top: 0.5rem;
+        color: #0d9488;
+        font-weight: 700;
+        font-size: 0.9rem;
+        text-decoration: none;
+        transition: color 0.2s ease;
+    }
+
+    .notice-link:hover, .exam-entry-link:hover {
+        color: #0f766e;
+        text-decoration: underline;
+    }
+
+    .exam-entry-link {
+        font-size: 1rem;
+        margin-top: 0.25rem;
+    }
+
+    .countdown-banner {
+        background: linear-gradient(135deg, #0d9488 0%, #0f766e 50%, #115e59 100%);
+        border: 2px solid #0d9488;
+        color: white;
+        padding: 2.5rem 2rem;
+    }
+
+    /* Countdown units — big version (start countdown) */
+    .countdown-units {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin: 1rem 0 0.5rem;
+    }
+
+    .countdown-unit {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        background: rgba(255, 255, 255, 0.15);
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        border-radius: 12px;
+        padding: 0.75rem 1.25rem;
+        min-width: 70px;
+        backdrop-filter: blur(4px);
+    }
+
+    .unit-value {
+        font-size: 2.25rem;
+        font-weight: 800;
+        line-height: 1;
+        color: white;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .unit-label {
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: rgba(255, 255, 255, 0.8);
+        margin-top: 0.25rem;
+    }
+
+    .countdown-sep {
+        font-size: 2rem;
+        font-weight: 700;
+        color: rgba(255, 255, 255, 0.5);
+        margin-bottom: 1.25rem;
+        line-height: 1;
+    }
+
+    /* Smaller deadline countdown inside application banner */
+    .deadline-countdown {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.75rem 1.25rem;
+        background: rgba(47, 133, 90, 0.12);
+        border: 1px solid rgba(47, 133, 90, 0.3);
+        border-radius: 10px;
+        margin-top: 0.25rem;
+    }
+
+    .deadline-countdown-label {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: #2f855a;
+    }
+
+    .countdown-units.small .countdown-unit {
+        background: rgba(47, 133, 90, 0.1);
+        border-color: rgba(47, 133, 90, 0.25);
+        padding: 0.5rem 0.875rem;
+        min-width: 52px;
+        border-radius: 8px;
+    }
+
+    .countdown-units.small .unit-value {
+        font-size: 1.4rem;
+        color: #2f855a;
+    }
+
+    .countdown-units.small .unit-label {
+        color: rgba(47, 133, 90, 0.8);
+    }
+
+    .countdown-units.small .countdown-sep {
+        font-size: 1.4rem;
+        color: rgba(47, 133, 90, 0.4);
+        margin-bottom: 0.875rem;
+    }
+
+    .countdown-open-date {
+        font-size: 1rem;
+        color: rgba(255, 255, 255, 0.9) !important;
+        margin: 0;
+    }
+
+    .countdown-deadline-hint {
+        font-size: 0.85rem;
+        color: rgba(255, 255, 255, 0.65) !important;
+        margin-top: 0.25rem;
+    }
+
+    .deadline-date {
+        font-size: 0.95rem;
+        color: #4a5568;
+    }
+
+    .countdown-icon {
+        font-size: 3rem;
+        animation: bounce 2s ease-in-out infinite;
+    }
+
+    .countdown-banner h2 {
+        color: white !important;
+        margin: 0;
+        font-size: 1.65rem;
+        font-weight: 800;
     }
 
     .loading-banner h2,
@@ -1870,7 +2522,8 @@
     .exam-icon,
     .results-icon,
     .completed-icon,
-    .inactive-icon {
+    .inactive-icon,
+    .countdown-icon {
         font-size: 3rem;
         animation: bounce 2s ease-in-out infinite;
     }

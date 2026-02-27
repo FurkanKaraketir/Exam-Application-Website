@@ -6,6 +6,7 @@
     import * as XLSX from 'xlsx';
 
     interface SystemSettings {
+        applicationStartDate: string;
         applicationDeadline: string;
         examDate: string;
         resultsReleaseDate: string;
@@ -31,12 +32,13 @@
     }
 
     let settings: SystemSettings = {
+        applicationStartDate: '',
         applicationDeadline: '',
         examDate: '',
         resultsReleaseDate: '',
         applicationEnabled: false,
         resultsEnabled: false,
-        currentYear: 2025,
+        currentYear: 2026,
         currentPhase: 'application',
         lastUpdated: new Date()
     };
@@ -87,12 +89,13 @@
             if (settingsSnap.exists()) {
                 const data = settingsSnap.data();
                 settings = {
+                    applicationStartDate: data.applicationStartDate || '',
                     applicationDeadline: data.applicationDeadline || '',
                     examDate: data.examDate || '',
                     resultsReleaseDate: data.resultsReleaseDate || '',
                     applicationEnabled: data.applicationEnabled || false,
                     resultsEnabled: data.resultsEnabled || false,
-                    currentYear: data.currentYear || 2025,
+                    currentYear: data.currentYear || 2026,
                     currentPhase: data.currentPhase || 'application',
                     resultsFileUrl: data.resultsFileUrl || '',
                     lastUpdated: data.lastUpdated?.toDate() || new Date()
@@ -134,6 +137,16 @@
     }
 
     async function saveSettings() {
+        // Validate start date vs deadline
+        if (settings.applicationStartDate && settings.applicationDeadline) {
+            const startDate = new Date(settings.applicationStartDate);
+            const deadlineDate = new Date(settings.applicationDeadline);
+            if (startDate >= deadlineDate) {
+                showNotification('Başvuru başlangıç tarihi, son başvuru tarihinden önce olmalıdır.', 'error');
+                return;
+            }
+        }
+
         // Validate dates
         if (settings.examDate && settings.applicationDeadline) {
             const examDate = new Date(settings.examDate);
@@ -156,8 +169,8 @@
         }
 
         // Validate current year
-        if (settings.currentYear < 2025 || settings.currentYear > 2030) {
-            showNotification('Geçerli bir yıl giriniz (2025-2030).', 'error');
+        if (settings.currentYear < 2026 || settings.currentYear > 2030) {
+            showNotification('Geçerli bir yıl giriniz (2026-2030).', 'error');
             return;
         }
 
@@ -294,7 +307,7 @@
                 const hallsSnap = await getDocs(hallsRef);
                 
                 for (const hallDoc of hallsSnap.docs) {
-                    totalCapacity += (hallDoc.data().capacity || 0) + 5;
+                    totalCapacity += (hallDoc.data().capacity || 0);
                     
                     const studentsRef = collection(db, "schools", schoolDoc.id, "examHalls", hallDoc.id, "students");
                     const studentsSnap = await getDocs(studentsRef);
@@ -456,19 +469,29 @@
             <h2>{settings.currentYear} Eğitim-Öğretim Yılı</h2>
             <div class="phase-indicator" style="background-color: {getPhaseColor(settings.currentPhase)}">
                 <span class="phase-icon">{getPhaseIcon(settings.currentPhase)}</span>
-                <span class="phase-text">{settings.currentPhase.toUpperCase()}</span>
+                <span class="phase-text">
+                    {#if settings.currentPhase === 'application'}BAŞVURU DÖNEMİ
+                    {:else if settings.currentPhase === 'exam'}SINAV DÖNEMİ
+                    {:else if settings.currentPhase === 'results'}SONUÇ DÖNEMİ
+                    {:else}TAMAMLANDI
+                    {/if}
+                </span>
             </div>
         </div>
 
         <div class="status-info">
             <div class="status-item">
                 <span class="status-icon">{settings.applicationEnabled ? '🟢' : '🔴'}</span>
-                <span class="status-text">Başvuru Sistemi {settings.applicationEnabled ? 'Aktif' : 'Kapalı'}</span>
+                <span class="status-text">
+                    Başvuru Sistemi: <strong>{settings.applicationEnabled ? 'Aktif — Öğrenciler geçerli tarihler içinde başvuru yapabilir' : 'Kapalı — Yeni başvuru alınmıyor'}</strong>
+                </span>
             </div>
             
             <div class="status-item">
                 <span class="status-icon">{settings.resultsEnabled ? '🟢' : '🔴'}</span>
-                <span class="status-text">Sonuç Sistemi {settings.resultsEnabled ? 'Aktif' : 'Kapalı'}</span>
+                <span class="status-text">
+                    Sonuç Sistemi: <strong>{settings.resultsEnabled ? 'Aktif — Sonuçlar görüntülenebilir' : 'Kapalı — Sonuçlar gizli'}</strong>
+                </span>
             </div>
         </div>
     </div>
@@ -525,9 +548,23 @@
     <!-- System Settings Configuration -->
     <div class="settings-configuration">
         <h3>Tarih ve Yıl Ayarları</h3>
+        <p class="section-description">Başvuru son tarihi, sınav tarihi ve sonuç açıklama tarihini belirleyin. Bu tarihler ana sayfada öğrencilere gösterilir.</p>
         
         <form on:submit|preventDefault={saveSettings}>
             <div class="settings-grid">
+                <div class="form-group">
+                    <label for="applicationStartDate">
+                        <span class="label-icon">🟢</span>
+                        Başvuru Başlangıç Tarihi
+                    </label>
+                    <input
+                        type="datetime-local"
+                        id="applicationStartDate"
+                        bind:value={settings.applicationStartDate}
+                    />
+                    <small class="helper-text">Ana sayfada geri sayım bu tarihe kadar gösterilir — boş bırakılabilir</small>
+                </div>
+
                 <div class="form-group">
                     <label for="applicationDeadline">
                         <span class="label-icon">📅</span>
@@ -579,7 +616,7 @@
                         type="number"
                         id="currentYear"
                         bind:value={settings.currentYear}
-                        min="2025"
+                        min="2026"
                         max="2030"
                     />
                     <small class="helper-text">Eğitim-öğretim yılı</small>
@@ -597,6 +634,7 @@
     <!-- Results File Management -->
     <div class="results-management">
         <h3>Sonuç Dosyası Yönetimi</h3>
+        <p class="section-description">Öğrencilerin sınav sonuçlarını içeren Excel dosyasını (.xlsx) yükleyin. Yüklenen dosya, "Sonuç Dönemi" aşamasında öğrencilere açılır.</p>
         
         <div class="upload-section">
             <div class="file-input-container">
@@ -636,10 +674,15 @@
 
     <!-- Year Management -->
     <div class="year-management">
-        <h3>Yıl Yönetimi</h3>
+        <h3>Yıl Yönetimi ve Arşivleme</h3>
         
         <div class="archive-section">
-            <p>Mevcut yılı arşivleyip yeni yıl için sistemi hazırlayın.</p>
+            <p>
+                <strong>⚠️ Dikkat:</strong> Bu işlem mevcut yılın tüm başvurularını ve salon atamalarını arşive taşır, ardından sistemi yeni yıl için sıfırlar.
+                <br><br>
+                Arşivleme yapılmadan önce <strong>Excel'e Aktar</strong> ile tüm başvuruların yedeğini alınız.
+                Bu işlem <strong>geri alınamaz</strong>.
+            </p>
             <button class="archive-btn" on:click={archiveCurrentYear}>
                 📦 {settings.currentYear} Yılını Arşivle ve {settings.currentYear + 1} İçin Hazırla
             </button>
@@ -830,6 +873,17 @@
         color: #718096;
         margin-bottom: 1.5rem;
         font-size: 0.95rem;
+    }
+
+    .section-description {
+        color: #718096;
+        font-size: 0.9rem;
+        margin-bottom: 1.5rem;
+        padding: 0.75rem 1rem;
+        background: #f8fafc;
+        border-left: 3px solid #14b8a6;
+        border-radius: 0 6px 6px 0;
+        line-height: 1.6;
     }
 
     .settings-configuration,

@@ -3,6 +3,7 @@
     import { onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from 'firebase/auth';
     import { auth } from '$lib/firebase';
     import { goto } from '$app/navigation';
+    import { page } from '$app/stores';
 
     let user: User | null = null;
     let email = '';
@@ -26,7 +27,7 @@
         try {
             await signInWithEmailAndPassword(auth, email, password);
         } catch (e) {
-            error = 'Invalid email or password';
+            error = 'Geçersiz e-posta adresi veya şifre. Lütfen tekrar deneyin.';
         }
     }
 
@@ -53,13 +54,13 @@
                 {/if}
                 
                 <div class="form-group">
-                    <label for="email">Email</label>
+                    <label for="email">E-posta Adresi</label>
                     <input
                         type="email"
                         id="email"
                         bind:value={email}
                         required
-                        placeholder="Yönetici emailinizi giriniz"
+                        placeholder="ornek@okul.edu.tr"
                         aria-required="true"
                         autocomplete="email"
                     />
@@ -99,13 +100,14 @@
         
         <div class="admin-body">
             <aside class="admin-sidebar" aria-label="Ana navigasyon menüsü">
-                <nav class="sidebar-nav" role="navigation">
+                <div class="sidebar-heading">Menü</div>
+                <nav class="sidebar-nav">
                     <a 
                         href="/admin" 
                         class="nav-item" 
-                        class:active={typeof window !== 'undefined' && window.location.pathname === '/admin'}
+                        class:active={$page.url.pathname === '/admin'}
                         aria-label="Başvurular sayfasına git"
-                        aria-current={typeof window !== 'undefined' && window.location.pathname === '/admin' ? 'page' : undefined}
+                        aria-current={$page.url.pathname === '/admin' ? 'page' : undefined}
                     >
                         <span class="nav-icon" aria-hidden="true">📊</span>
                         <span class="nav-label">Başvurular</span>
@@ -113,19 +115,29 @@
                     <a 
                         href="/admin/halls" 
                         class="nav-item" 
-                        class:active={typeof window !== 'undefined' && window.location.pathname === '/admin/halls'}
+                        class:active={$page.url.pathname === '/admin/halls'}
                         aria-label="Sınav salonları sayfasına git"
-                        aria-current={typeof window !== 'undefined' && window.location.pathname === '/admin/halls' ? 'page' : undefined}
+                        aria-current={$page.url.pathname === '/admin/halls' ? 'page' : undefined}
                     >
                         <span class="nav-icon" aria-hidden="true">🏫</span>
                         <span class="nav-label">Sınav Salonları</span>
                     </a>
                     <a 
+                        href="/admin/barcodes" 
+                        class="nav-item" 
+                        class:active={$page.url.pathname === '/admin/barcodes'}
+                        aria-label="Konum barkodları sayfasına git"
+                        aria-current={$page.url.pathname === '/admin/barcodes' ? 'page' : undefined}
+                    >
+                        <span class="nav-icon" aria-hidden="true">📍</span>
+                        <span class="nav-label">Konum Barkodları</span>
+                    </a>
+                    <a 
                         href="/admin/notes" 
                         class="nav-item" 
-                        class:active={typeof window !== 'undefined' && window.location.pathname === '/admin/notes'}
+                        class:active={$page.url.pathname === '/admin/notes'}
                         aria-label="Sınav notları sayfasına git"
-                        aria-current={typeof window !== 'undefined' && window.location.pathname === '/admin/notes' ? 'page' : undefined}
+                        aria-current={$page.url.pathname === '/admin/notes' ? 'page' : undefined}
                     >
                         <span class="nav-icon" aria-hidden="true">📝</span>
                         <span class="nav-label">Sınav Notları</span>
@@ -133,9 +145,9 @@
                     <a 
                         href="/admin/settings" 
                         class="nav-item" 
-                        class:active={typeof window !== 'undefined' && window.location.pathname === '/admin/settings'}
+                        class:active={$page.url.pathname === '/admin/settings'}
                         aria-label="Sistem ayarları sayfasına git"
-                        aria-current={typeof window !== 'undefined' && window.location.pathname === '/admin/settings' ? 'page' : undefined}
+                        aria-current={$page.url.pathname === '/admin/settings' ? 'page' : undefined}
                     >
                         <span class="nav-icon" aria-hidden="true">⚙️</span>
                         <span class="nav-label">Sistem Ayarları</span>
@@ -143,7 +155,7 @@
                 </nav>
             </aside>
             
-            <main class="admin-content" role="main">
+            <main class="admin-content">
                 <slot />
             </main>
         </div>
@@ -319,11 +331,22 @@
         overflow-y: auto;
     }
 
+    .sidebar-heading {
+        font-size: 0.7rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+        color: #a0aec0;
+        padding: 0 1.5rem 0.75rem;
+        margin-bottom: 0.25rem;
+        border-bottom: 1px solid #f0f4f8;
+    }
+
     .sidebar-nav {
         display: flex;
         flex-direction: column;
         gap: 0.5rem;
-        padding: 0 1rem;
+        padding: 0.75rem 1rem 0;
     }
 
     .nav-item {
@@ -364,18 +387,6 @@
         flex: 1;
         padding: 0;
         overflow-x: hidden;
-    }
-
-    .sr-only {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        padding: 0;
-        margin: -1px;
-        overflow: hidden;
-        clip: rect(0, 0, 0, 0);
-        white-space: nowrap;
-        border-width: 0;
     }
 
     @media (max-width: 768px) {

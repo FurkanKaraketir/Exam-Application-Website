@@ -180,29 +180,35 @@
     </div>
 
     <div class="content">
+        <div class="info-banner">
+            <span class="info-icon">ℹ️</span>
+            <span>Bu sayfadaki notlar ve duyurular, ana sayfada öğrencilere gösterilir. Sınav günü, kurallar veya önemli hatırlatmalar gibi bilgileri buraya ekleyebilirsiniz.</span>
+        </div>
+
         <div class="add-note-section">
             <form on:submit|preventDefault={addNote}>
                 <div class="form-group">
-                    <label for="newNote">Yeni Not</label>
+                    <label for="newNote">Yeni Duyuru / Not</label>
                     <div class="input-group">
                         <input
                             type="text"
                             id="newNote"
                             bind:value={newNote}
-                            placeholder="Yeni not ekleyin..."
+                            placeholder="Örn: Sınava kimlik kartıyla gelinmesi zorunludur."
                         />
                         <button type="submit" class="add-btn">Ekle</button>
                     </div>
+                    <small class="helper-text">Eklenen notlar hemen ana sayfada yayınlanır</small>
                 </div>
             </form>
         </div>
 
         <div class="notes-list">
-            <h2>Mevcut Notlar</h2>
+            <h2>Yayınlanan Notlar ve Duyurular</h2>
             {#if loading}
                 <div class="loading" role="status" aria-live="polite">Yükleniyor...</div>
             {:else if notes.length === 0}
-                <div class="empty-state">Henüz not eklenmemiş.</div>
+                <div class="empty-state">Henüz duyuru veya not eklenmemiş. Yukarıdaki formu kullanarak ilk notunuzu ekleyebilirsiniz.</div>
             {:else}
                 {#each notes as note, index}
                     <div class="note-item">
@@ -218,6 +224,8 @@
                                 class="move-btn" 
                                 on:click={() => moveNote(index, 'up')}
                                 disabled={index === 0}
+                                title="Yukarı taşı"
+                                aria-label="Notu yukarı taşı"
                             >
                                 ↑
                             </button>
@@ -225,12 +233,15 @@
                                 class="move-btn" 
                                 on:click={() => moveNote(index, 'down')}
                                 disabled={index === notes.length - 1}
+                                title="Aşağı taşı"
+                                aria-label="Notu aşağı taşı"
                             >
                                 ↓
                             </button>
                             <button 
                                 class="delete-btn" 
                                 on:click={() => deleteNote(index)}
+                                title="Bu notu sil"
                             >
                                 Sil
                             </button>
@@ -287,6 +298,33 @@
         color: #2d3748;
         margin-bottom: 1.5rem;
         font-size: 1.5rem;
+    }
+
+    .info-banner {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.75rem;
+        padding: 1rem 1.25rem;
+        background: #ebf8ff;
+        border: 1px solid #90cdf4;
+        border-radius: 8px;
+        color: #2b6cb0;
+        font-size: 0.9rem;
+        line-height: 1.6;
+        margin-bottom: 1.5rem;
+    }
+
+    .info-icon {
+        font-size: 1.2rem;
+        flex-shrink: 0;
+        margin-top: 0.1rem;
+    }
+
+    .helper-text {
+        display: block;
+        color: #718096;
+        font-size: 0.85rem;
+        margin-top: 0.5rem;
     }
 
     .form-group {

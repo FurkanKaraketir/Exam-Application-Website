@@ -1,12 +1,13 @@
 <script lang="ts">
     import { db } from '$lib/firebase';
-    import { collection, getDocs, query, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+    import { collection, getDocs, query, doc, setDoc, updateDoc, deleteDoc, deleteField } from 'firebase/firestore';
     import { onMount } from 'svelte';
     import { jsPDF } from 'jspdf';
 
     interface School {
         id: string;
         name: string;
+        weight: number;
     }
 
     interface ExamHall {
@@ -25,6 +26,9 @@
     let selectedHall: ExamHall | null = null;
     let isDeleteModalOpen = false;
     let hallToDelete: ExamHall | null = null;
+    let isDeleteSchoolModalOpen = false;
+    let schoolToDelete: School | null = null;
+    let isDeletingSchool = false;
 
     let formData = {
         name: '',
@@ -64,7 +68,8 @@
             const schoolsSnapshot = await getDocs(schoolsQuery);
             schools = schoolsSnapshot.docs.map(doc => ({
                 id: doc.id,
-                name: doc.data().name
+                name: doc.data().name,
+                weight: doc.data().weight ?? 0
             }));
             // Removed success notification to reduce spam on page load
         } catch (error) {
@@ -144,6 +149,20 @@
             name: '',
             capacity: 20
         };
+    }
+
+    async function saveSchoolWeight(schoolId: string, weight: number) {
+        try {
+            const schoolRef = doc(db, "schools", schoolId);
+            await updateDoc(schoolRef, { weight });
+            const school = schools.find(s => s.id === schoolId);
+            if (school) school.weight = weight;
+            schools = schools;
+            showNotification('Bina önceliği güncellendi.', 'success');
+        } catch (error) {
+            console.error('Error updating school weight:', error);
+            showNotification('Öncelik güncellenirken bir hata oluştu.', 'error');
+        }
     }
 
     async function handleCreateSubmit() {
@@ -241,6 +260,65 @@
         }
     }
 
+    function handleDeleteSchool(school: School) {
+        schoolToDelete = school;
+        isDeleteSchoolModalOpen = true;
+    }
+
+    async function confirmDeleteSchool() {
+        if (!schoolToDelete) return;
+
+        try {
+            isDeletingSchool = true;
+
+            // Delete all students in each hall, then delete each hall
+            const hallsSnapshot = await getDocs(collection(db, "schools", schoolToDelete.id, "examHalls"));
+            for (const hallDoc of hallsSnapshot.docs) {
+                const studentsSnapshot = await getDocs(collection(db, "schools", schoolToDelete.id, "examHalls", hallDoc.id, "students"));
+                for (const studentDoc of studentsSnapshot.docs) {
+                    await deleteDoc(doc(db, "schools", schoolToDelete.id, "examHalls", hallDoc.id, "students", studentDoc.id));
+                }
+                await deleteDoc(doc(db, "schools", schoolToDelete.id, "examHalls", hallDoc.id));
+            }
+
+            // Clear hall assignment from applications that were assigned to this school
+            const applicationsSnapshot = await getDocs(collection(db, "examApplications"));
+            for (const appDoc of applicationsSnapshot.docs) {
+                const data = appDoc.data();
+                if (data.schoolId === schoolToDelete.id) {
+                    await updateDoc(doc(db, "examApplications", appDoc.id), {
+                        hallId: deleteField(),
+                        hallName: deleteField(),
+                        schoolId: deleteField(),
+                        schoolName: deleteField(),
+                        orderNumber: deleteField(),
+                        assignedAt: deleteField()
+                    });
+                }
+            }
+
+            // Delete the school document
+            await deleteDoc(doc(db, "schools", schoolToDelete.id));
+
+            // Update local state
+            schools = schools.filter(s => s.id !== schoolToDelete!.id);
+            if (selectedSchool?.id === schoolToDelete.id) {
+                selectedSchool = null;
+                examHalls = [];
+            }
+
+            showNotification('Sınav binası başarıyla silindi.', 'success');
+        } catch (error) {
+            console.error('Error deleting school:', error);
+            const errorMessage = error instanceof Error ? error.message : 'Bilinmeyen bir hata';
+            showNotification(`Sınav binası silinirken bir hata oluştu: ${errorMessage}`, 'error');
+        } finally {
+            isDeletingSchool = false;
+            isDeleteSchoolModalOpen = false;
+            schoolToDelete = null;
+        }
+    }
+
     async function generateHallLists() {
         if (!selectedSchool) {
             showNotification('Lütfen önce bir okul seçin.', 'warning');
@@ -310,13 +388,13 @@
                     hallInfo = [
                         ["Okul", ":", hall.schoolName],
                         ["Salon / Kapasite", ":", `${hall.name} / ${hall.capacity} kişilik`],
-                        ["Öğrenci Sayısı / Sınav Tarihi", ":", `${students.length} öğrenci / 19.04.2025`]
+                        ["Öğrenci Sayısı / Sınav Tarihi", ":", `${students.length} öğrenci / 18.04.2026`]
                     ];
                 } else {
                     hallInfo = [
                         ["Okul", ":", hall.schoolName],
                         ["Salon / Kapasite", ":", `${hall.name} / ${hall.capacity} + ${students.length - hall.capacity} kişilik`],
-                        ["Öğrenci Sayısı / Sınav Tarihi", ":", `${students.length} öğrenci / 19.04.2025`]
+                        ["Öğrenci Sayısı / Sınav Tarihi", ":", `${students.length} öğrenci / 18.04.2026`]
                     ];
                 }
                 let y = 75;
@@ -441,6 +519,31 @@
 <main class="container">
     <h1>Sınav Salonları Yönetimi</h1>
 
+    <section class="priority-section" aria-labelledby="priority-heading">
+        <h2 id="priority-heading">Bina Önceliği</h2>
+        <p class="priority-description">Öğrenci atamasında hangi binanın önce doldurulacağını belirleyin. Daha yüksek ağırlık = önce doldurulur. Aynı ağırlıktaki binalar arasında rastgele sıra uygulanır.</p>
+        <div class="priority-grid">
+            {#each schools as school}
+                <div class="priority-item">
+                    <label for="weight-{school.id}" class="priority-label">{school.name}</label>
+                    <input
+                        type="number"
+                        id="weight-{school.id}"
+                        class="priority-input"
+                        min="0"
+                        value={school.weight}
+                        on:change={(e) => {
+                            const val = parseInt((e.target as HTMLInputElement).value, 10);
+                            const weight = isNaN(val) ? 0 : Math.max(0, val);
+                            saveSchoolWeight(school.id, weight);
+                        }}
+                        aria-label="{school.name} öncelik ağırlığı"
+                    />
+                </div>
+            {/each}
+        </div>
+    </section>
+
     <div class="controls">
         <select 
             class="school-select"
@@ -449,17 +552,27 @@
                 const school = schools.find(s => s.id === target.value);
                 if (school) loadExamHalls(school);
             }}
+            aria-label="Sınav binası seçin"
         >
-            <option value="">Okul seçiniz</option>
+            <option value="">Sınav binasını seçin...</option>
             {#each schools as school}
                 <option value={school.id}>{school.name}</option>
             {/each}
         </select>
-        <button on:click={openCreateModal} class="create-btn">
-            Yeni Salon Ekle
+        <button on:click={openCreateModal} class="create-btn" title="Seçili binaya yeni bir salon ekle">
+            ➕ Yeni Salon Ekle
         </button>
-        <button on:click={generateHallLists} class="print-btn">
-            Salon Listelerini Yazdır
+        {#if selectedSchool}
+            <button 
+                on:click={() => handleDeleteSchool(selectedSchool!)} 
+                class="delete-school-btn" 
+                title="Bu sınav binasını sistemden kaldır"
+            >
+                🗑️ Bina Sil
+            </button>
+        {/if}
+        <button on:click={generateHallLists} class="print-btn" title="Seçili binanın tüm salon öğrenci listelerini PDF olarak indir">
+            🖨️ Salon Listelerini PDF Olarak İndir
         </button>
     </div>
 
@@ -469,7 +582,7 @@
                 <thead>
                     <tr>
                         <th>Salon Adı</th>
-                        <th>Kapasite</th>
+                        <th>Öğrenci Kapasitesi</th>
                         <th>İşlemler</th>
                     </tr>
                 </thead>
@@ -516,6 +629,9 @@
                 tabindex="0"
             >
                 <h2>{isCreateModalOpen ? 'Yeni Salon Ekle' : 'Salon Düzenle'}</h2>
+                {#if isCreateModalOpen}
+                    <p class="modal-description">{selectedSchool?.name || 'Seçili bina'} için yeni bir sınav salonu tanımlayın.</p>
+                {/if}
                 <form on:submit|preventDefault={isCreateModalOpen ? handleCreateSubmit : handleEditSubmit}>
                     <div class="form-group">
                         <label for="name">Salon Adı</label>
@@ -524,12 +640,13 @@
                             id="name"
                             bind:value={formData.name}
                             required
-                            placeholder="Örn: A-101"
+                            placeholder="Örn: A-101, Salon 1, Fizik Lab."
                         />
+                        <small class="helper-text">Salon adı öğrencilerin sınav belgelerinde görünür</small>
                     </div>
 
                     <div class="form-group">
-                        <label for="capacity">Kapasite</label>
+                        <label for="capacity">Öğrenci Kapasitesi</label>
                         <input
                             type="number"
                             id="capacity"
@@ -538,6 +655,7 @@
                             min="1"
                             max="100"
                         />
+                        <small class="helper-text">Salonun alabileceği öğrenci sayısı — sisteme gözetmenler için otomatik +5 eklenir</small>
                     </div>
 
                     <div class="modal-actions">
@@ -598,11 +716,111 @@
     </div>
 {/if}
 
+{#if isDeleteSchoolModalOpen && schoolToDelete}
+    <div 
+        class="modal-overlay" 
+        on:click={() => { if (!isDeletingSchool) { isDeleteSchoolModalOpen = false; schoolToDelete = null; } }}
+        on:keydown={(e) => { if (e.key === 'Escape' && !isDeletingSchool) { isDeleteSchoolModalOpen = false; schoolToDelete = null; } }}
+        role="button"
+        tabindex="0"
+    >
+        <div 
+            class="modal delete-confirmation-modal" 
+            on:click|stopPropagation
+            on:keydown|stopPropagation
+            role="presentation"
+        >
+            <div class="delete-icon">
+                <span>!</span>
+            </div>
+            <h2>Sınav Binası Silme Onayı</h2>
+            <p class="delete-message">
+                <strong>{schoolToDelete.name}</strong> sınav binasını silmek istediğinizden emin misiniz?
+            </p>
+            <p class="delete-warning">Bu işlem geri alınamaz. Tüm salonlar, öğrenci atamaları ve bu binaya atanmış başvuruların salon bilgileri silinecektir!</p>
+            <div class="modal-actions">
+                <button 
+                    type="button" 
+                    class="cancel-btn" 
+                    on:click={() => { if (!isDeletingSchool) { isDeleteSchoolModalOpen = false; schoolToDelete = null; } }}
+                    disabled={isDeletingSchool}
+                >
+                    İptal
+                </button>
+                <button 
+                    type="button" 
+                    class="confirm-delete-btn" 
+                    on:click={confirmDeleteSchool}
+                    disabled={isDeletingSchool}
+                >
+                    {isDeletingSchool ? 'Siliniyor...' : 'Sil'}
+                </button>
+            </div>
+        </div>
+    </div>
+{/if}
+
 <style>
     .container {
         max-width: 1200px;
         margin: 0 auto;
         padding: 2rem;
+    }
+
+    .priority-section {
+        background: white;
+        border-radius: 8px;
+        padding: 1.5rem;
+        margin-bottom: 2rem;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+
+    .priority-section h2 {
+        font-size: 1.25rem;
+        color: #2d3748;
+        margin: 0 0 0.5rem 0;
+    }
+
+    .priority-description {
+        color: #718096;
+        font-size: 0.875rem;
+        margin: 0 0 1rem 0;
+        line-height: 1.4;
+    }
+
+    .priority-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 1rem;
+    }
+
+    .priority-item {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+
+    .priority-label {
+        flex: 1;
+        font-size: 0.9rem;
+        color: #4a5568;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .priority-input {
+        width: 4rem;
+        padding: 0.5rem;
+        border: 2px solid #e2e8f0;
+        border-radius: 6px;
+        font-size: 1rem;
+        text-align: center;
+    }
+
+    .priority-input:focus {
+        outline: none;
+        border-color: #14b8a6;
     }
 
     .controls {
@@ -642,6 +860,23 @@
         background: linear-gradient(to right, #115e59, #134e4a);
         transform: translateY(-1px);
         box-shadow: 0 4px 12px rgba(13, 148, 136, 0.2);
+    }
+
+    .delete-school-btn {
+        padding: 0.75rem 1.5rem;
+        background: #e53e3e;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-weight: 600;
+        transition: all 0.3s ease;
+    }
+
+    .delete-school-btn:hover {
+        background: #c53030;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(229, 62, 62, 0.2);
     }
 
     .table-container {
@@ -759,6 +994,23 @@
         margin-bottom: 0.5rem;
         font-weight: 600;
         color: #2d3748;
+    }
+
+    .helper-text {
+        display: block;
+        color: #718096;
+        font-size: 0.85rem;
+        margin-top: 0.4rem;
+    }
+
+    .modal-description {
+        color: #718096;
+        font-size: 0.9rem;
+        margin-bottom: 1.25rem;
+        padding: 0.6rem 0.875rem;
+        background: #f8fafc;
+        border-left: 3px solid #14b8a6;
+        border-radius: 0 6px 6px 0;
     }
 
     .form-group input {

@@ -1,6 +1,6 @@
 <script lang="ts">
     import { db } from '$lib/firebase';
-    import { collection, getDocs, query, orderBy, updateDoc, doc, deleteDoc, type QueryDocumentSnapshot, addDoc, setDoc, getDoc } from 'firebase/firestore';
+    import { collection, getDocs, query, orderBy, updateDoc, doc, deleteDoc, type QueryDocumentSnapshot, addDoc, setDoc, getDoc, deleteField } from 'firebase/firestore';
     import { onMount } from 'svelte';
     import * as XLSX from 'xlsx';
     import { fade } from 'svelte/transition';
@@ -33,6 +33,7 @@
     interface School {
         id: string;
         name: string;
+        weight?: number;
     }
 
     interface ExamHall {
@@ -72,12 +73,21 @@
     let newSchoolName = '';
     let totalCapacity = 0;
     let assignedCount = 0;
+    interface SchoolCapacityStat {
+        schoolId: string;
+        schoolName: string;
+        totalCapacity: number;
+        assignedCount: number;
+    }
+    let schoolCapacityStats: SchoolCapacityStat[] = [];
     let isDeleteModalOpen = false;
     let applicationToDelete: ExamApplication | null = null;
     let originators: string[] = [];
     let error: string | null = null;
     let loading = true;
     let isRefreshing = false;
+    let isResetRoomsModalOpen = false;
+    let isResettingRooms = false;
     let isCustomSchool = false;
     let customSchoolName = '';
     let schoolList: string[] = [];
@@ -90,6 +100,8 @@
         tckn: '',
         phoneNumber: ''
     };
+    let applicationsWithMissingFields: Set<string> = new Set();
+    let showOnlyIncomplete = false;
 
     type NotificationType = 'success' | 'error' | 'warning';
     type Notification = {
@@ -118,20 +130,33 @@
         try {
             let total = 0;
             let assigned = 0;
+            const stats: SchoolCapacityStat[] = [];
             const schoolsQuery = query(collection(db, "schools"));
             const schoolsSnapshot = await getDocs(schoolsQuery);
             
             for (const schoolDoc of schoolsSnapshot.docs) {
+                const schoolName = schoolDoc.data().name || schoolDoc.id;
                 const hallsQuery = query(collection(db, "schools", schoolDoc.id, "examHalls"));
                 const hallsSnapshot = await getDocs(hallsQuery);
                 
+                let schoolTotal = 0;
                 hallsSnapshot.docs.forEach(hallDoc => {
-                    //with extra 5 seats for the examiners
-                    total += (hallDoc.data().capacity || 0) +5 ;
+                    schoolTotal += (hallDoc.data().capacity || 0);
+                });
+                total += schoolTotal;
+                
+                const schoolAssigned = applications.filter(app => app.schoolId === schoolDoc.id).length;
+                assigned += schoolAssigned;
+                
+                stats.push({
+                    schoolId: schoolDoc.id,
+                    schoolName,
+                    totalCapacity: schoolTotal,
+                    assignedCount: schoolAssigned
                 });
             }
             
-            assigned = applications.filter(app => app.hallName).length;
+            schoolCapacityStats = stats;
             totalCapacity = total;
             assignedCount = assigned;
         } catch (error) {
@@ -155,7 +180,8 @@
             const schoolsSnapshot = await getDocs(schoolsQuery);
             schools = schoolsSnapshot.docs.map(doc => ({
                 id: doc.id,
-                name: doc.data().name
+                name: doc.data().name,
+                weight: doc.data().weight ?? 0
             }));
             // Removed success notification to reduce spam on page load
         } catch (error) {
@@ -244,6 +270,57 @@
         }
     }
 
+    async function resetAllRooms() {
+        isResettingRooms = true;
+        isResetRoomsModalOpen = false;
+        try {
+            // Delete all student docs from every hall subcollection
+            const schoolsSnapshot = await getDocs(collection(db, "schools"));
+            for (const schoolDoc of schoolsSnapshot.docs) {
+                const hallsSnapshot = await getDocs(collection(db, "schools", schoolDoc.id, "examHalls"));
+                for (const hallDoc of hallsSnapshot.docs) {
+                    const studentsSnapshot = await getDocs(collection(db, "schools", schoolDoc.id, "examHalls", hallDoc.id, "students"));
+                    for (const studentDoc of studentsSnapshot.docs) {
+                        await deleteDoc(doc(db, "schools", schoolDoc.id, "examHalls", hallDoc.id, "students", studentDoc.id));
+                    }
+                }
+            }
+
+            // Clear hall assignment fields from all exam applications
+            const applicationsSnapshot = await getDocs(collection(db, "examApplications"));
+            for (const appDoc of applicationsSnapshot.docs) {
+                await updateDoc(doc(db, "examApplications", appDoc.id), {
+                    hallId: deleteField(),
+                    hallName: deleteField(),
+                    schoolId: deleteField(),
+                    schoolName: deleteField(),
+                    orderNumber: deleteField(),
+                    assignedAt: deleteField()
+                });
+            }
+
+            // Update local state
+            applications = applications.map(app => ({
+                ...app,
+                hallId: undefined,
+                hallName: undefined,
+                schoolId: undefined,
+                schoolName: '',
+                orderNumber: undefined,
+                assignedAt: undefined
+            }));
+            filterApplications();
+            await loadCapacityStats();
+            showNotification('Tüm salon atamaları başarıyla sıfırlandı.', 'success');
+        } catch (error) {
+            console.error('Error resetting rooms:', error);
+            const errorMessage = error instanceof Error ? error.message : 'Bilinmeyen bir hata oluştu';
+            showNotification(`Salon atamaları sıfırlanırken bir hata oluştu: ${errorMessage}`, 'error');
+        } finally {
+            isResettingRooms = false;
+        }
+    }
+
 
     async function loadApplications() {
         try {
@@ -263,10 +340,13 @@
             const allDocsQuery = query(collection(db, "examApplications"));
             const allDocsSnapshot = await getDocs(allDocsQuery);
 
-            // Check all documents for missing fields
+            // Check all documents for missing fields (handle non-string values safely)
             allDocsSnapshot.docs.forEach((doc) => {
                 const data = doc.data();
-                const missingFields = requiredFields.filter(field => !data[field] || data[field].trim() === '');
+                const missingFields = requiredFields.filter(field => {
+                    const val = data[field];
+                    return val == null || (typeof val === 'string' && val.trim() === '');
+                });
                 
                 if (missingFields.length > 0) {
                     missingFieldsDocs.push({
@@ -275,6 +355,8 @@
                     });
                 }
             });
+
+            applicationsWithMissingFields = new Set(missingFieldsDocs.map(d => d.id));
 
             if (missingFieldsDocs.length > 0) {
                 const warningMessage = `${allDocsSnapshot.docs.length} başvurudan ${missingFieldsDocs.length} tanesinde eksik alan bulundu:\n` +
@@ -317,12 +399,16 @@
     }
 
     function filterApplications() {
-        filteredApplications = applications.filter(app => 
+        let filtered = applications.filter(app => 
             app.studentFullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
             app.tcId.includes(searchTerm) ||
             app.schoolName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
             app.hallName?.toLowerCase().includes(searchTerm.toLowerCase())
         );
+        if (showOnlyIncomplete) {
+            filtered = filtered.filter(app => applicationsWithMissingFields.has(app.tcId));
+        }
+        filteredApplications = filtered;
         sortApplications();
     }
 
@@ -381,6 +467,15 @@
     async function handleEditSubmit() {
         if (!selectedApplication) return;
 
+        if (!editFormData.studentFullName?.trim()) {
+            showNotification('Öğrenci adı soyadı gereklidir.', 'error');
+            return;
+        }
+        if (!editFormData.studentSchoolName?.trim()) {
+            showNotification('Öğrencinin kayıtlı olduğu okul gereklidir.', 'error');
+            return;
+        }
+
         // Validate TC number
         if (!editFormData.tcId || editFormData.tcId.length !== 11) {
             showNotification('T.C. Kimlik Numarası 11 haneli olmalıdır.', 'error');
@@ -392,11 +487,13 @@
             return;
         }
 
-        // Validate phone number
-        if (!editFormData.phoneNumber || editFormData.phoneNumber.length !== 10) {
-            showNotification('Telefon numarası 10 haneli olmalıdır.', 'error');
+        // Normalize and validate phone number
+        const phoneDigits = (editFormData.phoneNumber || '').replace(/\D/g, '');
+        if (phoneDigits.length !== 10 || !phoneDigits.startsWith('5')) {
+            showNotification('Geçerli bir 10 haneli cep telefonu numarası giriniz (5 ile başlamalı).', 'error');
             return;
         }
+        editFormData.phoneNumber = phoneDigits;
 
         // Convert names to uppercase
         if (editFormData.studentFullName) {
@@ -471,7 +568,7 @@
                         studentFullName: editFormData.studentFullName,
                         schoolId: editFormData.schoolId,
                         schoolName: schools.find(s => s.id === editFormData.schoolId)?.name,
-                        studentSchoolName: editFormData.schoolName || selectedApplication.schoolName,
+                        studentSchoolName: editFormData.studentSchoolName || selectedApplication.studentSchoolName,
                         parentFullName: editFormData.parentFullName,
                         phoneNumber: editFormData.phoneNumber,
                         hallName: selectedHall.name,
@@ -492,6 +589,17 @@
                 assignedAt: editFormData.hallId ? new Date() : null
             });
 
+            // If hall assignment exists, also update the hall student document when fixing fields
+            if (editFormData.schoolId && editFormData.hallId) {
+                const hallStudentRef = doc(db, "schools", editFormData.schoolId, "examHalls", editFormData.hallId, "students", selectedApplication.tcId);
+                await updateDoc(hallStudentRef, {
+                    studentFullName: editFormData.studentFullName,
+                    parentFullName: editFormData.parentFullName,
+                    phoneNumber: editFormData.phoneNumber,
+                    studentSchoolName: editFormData.studentSchoolName || selectedApplication.studentSchoolName
+                });
+            }
+
             // Update local state
             applications = applications.map(app => 
                 app.tcId === selectedApplication?.tcId 
@@ -499,6 +607,8 @@
                     : app
             );
             filterApplications();
+            const fixedTcId = selectedApplication!.tcId;
+            applicationsWithMissingFields = new Set([...applicationsWithMissingFields].filter(id => id !== fixedTcId));
             showNotification('Başvuru başarıyla güncellendi.', 'success');
             closeEditModal();
         } catch (error) {
@@ -598,6 +708,7 @@
             await setDoc(schoolRef, {
                 id: schoolRef.id,
                 name: newSchoolName.trim(),
+                weight: 0,
                 createdAt: new Date()
             });
 
@@ -710,17 +821,82 @@
         editFormData.studentSchoolName = customSchoolName;
     }
 
+    /** Fisher-Yates shuffle */
+    function shuffle<T>(array: T[]): T[] {
+        const arr = [...array];
+        let currentIndex = arr.length;
+        while (currentIndex !== 0) {
+            const randomIndex = Math.floor(Math.random() * currentIndex);
+            currentIndex--;
+            [arr[currentIndex], arr[randomIndex]] = [arr[randomIndex], arr[currentIndex]];
+        }
+        return arr;
+    }
+
+    /** Find school and hall using the normal algorithm (weight-based, capacity check) */
+    async function findSchoolAndHallForApplication(): Promise<{ schoolId: string; schoolName: string; hallId: string; hallName: string } | null> {
+        const schoolsSnapshot = await getDocs(collection(db, "schools"));
+        const schools = schoolsSnapshot.docs;
+
+        if (schools.length === 0) return null;
+
+        const schoolsWithWeight = schools.map(d => ({
+            doc: d,
+            weight: d.data().weight ?? 0
+        }));
+        schoolsWithWeight.sort((a, b) => b.weight - a.weight);
+
+        const orderedSchools: typeof schools = [];
+        let i = 0;
+        while (i < schoolsWithWeight.length) {
+            const currentWeight = schoolsWithWeight[i].weight;
+            const sameWeightGroup = schoolsWithWeight
+                .filter(s => s.weight === currentWeight)
+                .map(s => s.doc);
+            orderedSchools.push(...shuffle(sameWeightGroup));
+            i += sameWeightGroup.length;
+        }
+
+        for (const school of orderedSchools) {
+            const examHallsSnapshot = await getDocs(collection(db, "schools", school.id, "examHalls"));
+            const examHalls = examHallsSnapshot.docs;
+            if (examHalls.length === 0) continue;
+
+            const shuffledHalls = shuffle([...examHalls]);
+            for (const hall of shuffledHalls) {
+                const hallData = hall.data();
+                const studentsSnapshot = await getDocs(collection(db, "schools", school.id, "examHalls", hall.id, "students"));
+                if (studentsSnapshot.size < hallData.capacity) {
+                    return {
+                        schoolId: school.id,
+                        schoolName: school.data().name,
+                        hallId: hall.id,
+                        hallName: hallData.name
+                    };
+                }
+            }
+        }
+        return null;
+    }
+
     async function handleAddApplication() {
-        if (!newApplication.tcId || !newApplication.studentFullName || !newApplication.schoolName || 
-            !newApplication.parentFullName || !newApplication.phoneNumber || !newApplication.studentSchoolName ||
-            !newApplication.schoolId || !newApplication.hallId) {
+        if (!newApplication.tcId || !newApplication.studentFullName ||
+            !newApplication.parentFullName || !newApplication.phoneNumber || !newApplication.studentSchoolName) {
             showNotification('Lütfen tüm zorunlu alanları doldurun.', 'error');
             return;
         }
 
+        // Normalize phone to digits only
+        const phoneDigits = (newApplication.phoneNumber || '').replace(/\D/g, '');
+        if (phoneDigits.length !== 10 || !phoneDigits.startsWith('5')) {
+            showNotification('Geçerli bir 10 haneli cep telefonu numarası giriniz (5 ile başlamalı).', 'error');
+            return;
+        }
+        newApplication.phoneNumber = phoneDigits;
+
         // Convert names to uppercase
-        newApplication.studentFullName = toTurkishUpperCase(newApplication.studentFullName);
-        newApplication.parentFullName = toTurkishUpperCase(newApplication.parentFullName);
+        newApplication.studentFullName = toTurkishUpperCase(newApplication.studentFullName.trim());
+        newApplication.parentFullName = toTurkishUpperCase(newApplication.parentFullName.trim());
 
         try {
             // Check if document already exists
@@ -729,45 +905,44 @@
             
             if (docSnap.exists()) {
                 showNotification('Bu TC Kimlik numarası ile daha önce başvuru yapılmış.', 'error');
-                //update existing document
                 return;
             }
 
-            // Get current students in the selected hall
-            const studentsSnapshot = await getDocs(collection(db, "schools", newApplication.schoolId, "examHalls", newApplication.hallId, "students"));
-            const selectedHall = newAvailableHalls.find(h => h.id === newApplication.hallId);
-            
-            if (!selectedHall) {
-                showNotification('Seçilen salon bulunamadı.', 'error');
+            // Assign school and hall using the normal algorithm
+            const assignment = await findSchoolAndHallForApplication();
+            if (!assignment) {
+                showNotification('Sınav yeri ataması yapılamadı. Tüm salonlar dolu.', 'error');
                 return;
             }
 
-            // dont Check hall capacity
-           // if (studentsSnapshot.size >= selectedHall.capacity) {
-           //     showNotification('Seçilen salon kapasitesi dolu.', 'error');
-           //     return;
-           // }
+            newApplication.schoolId = assignment.schoolId;
+            newApplication.schoolName = assignment.schoolName;
+            newApplication.hallId = assignment.hallId;
+            newApplication.hallName = assignment.hallName;
+
+            const studentsSnapshot = await getDocs(collection(db, "schools", assignment.schoolId, "examHalls", assignment.hallId, "students"));
+            const orderNumber = studentsSnapshot.size + 1;
 
             // Add student to the hall
-            await setDoc(doc(db, "schools", newApplication.schoolId, "examHalls", newApplication.hallId, "students", newApplication.tcId), {
+            await setDoc(doc(db, "schools", assignment.schoolId, "examHalls", assignment.hallId, "students", newApplication.tcId), {
                 tcId: newApplication.tcId,
                 studentFullName: newApplication.studentFullName,
-                schoolId: newApplication.schoolId,
-                schoolName: newApplication.schoolName,
+                schoolId: assignment.schoolId,
+                schoolName: assignment.schoolName,
                 studentSchoolName: newApplication.studentSchoolName,
                 parentFullName: newApplication.parentFullName,
                 phoneNumber: newApplication.phoneNumber,
-                hallName: newApplication.hallName,
-                hallId: newApplication.hallId,
+                hallName: assignment.hallName,
+                hallId: assignment.hallId,
                 assignedAt: new Date(),
-                orderNumber: studentsSnapshot.size + 1
+                orderNumber
             });
 
             // Add the application to Firestore
             await setDoc(docRef, {
                 ...newApplication,
                 assignedAt: new Date(),
-                orderNumber: studentsSnapshot.size + 1
+                orderNumber
             });
 
             // Update local state
@@ -802,59 +977,6 @@
         const input = event.target as HTMLInputElement;
         newCustomSchoolName = toTurkishUpperCase(input.value);
         newApplication.studentSchoolName = newCustomSchoolName;
-    }
-
-    async function handleNewSchoolChange(event: Event) {
-        const select = event.target as HTMLSelectElement;
-        const selectedSchoolId = select.value;
-        
-        // Find the selected school
-        const selectedSchool = schools.find(s => s.id === selectedSchoolId);
-        if (selectedSchool) {
-            newApplication.schoolId = selectedSchool.id;
-            newApplication.schoolName = selectedSchool.name;
-            // Reset hall information
-            newApplication.hallId = undefined;
-            newApplication.hallName = undefined;
-            newApplication.orderNumber = undefined;
-            // Load halls for the selected school
-            await loadHallsForNewApplication(selectedSchool.id);
-        }
-    }
-
-    async function loadHallsForNewApplication(schoolId: string) {
-        try {
-            const hallsQuery = query(collection(db, "schools", schoolId, "examHalls"));
-            const hallsSnapshot = await getDocs(hallsQuery);
-            newAvailableHalls = hallsSnapshot.docs.map(doc => ({
-                id: doc.id,
-                name: doc.data().name,
-                capacity: doc.data().capacity,
-                schoolId: schoolId,
-                schoolName: schools.find(s => s.id === schoolId)?.name || ''
-            }));
-        } catch (error) {
-            showNotification('Sınav salonları yüklenirken bir hata oluştu.', 'error');
-            newAvailableHalls = [];
-        }
-    }
-
-    async function handleNewHallChange(event: Event) {
-        const select = event.target as HTMLSelectElement;
-        const selectedHallId = select.value;
-        
-        if (!selectedHallId) {
-            newApplication.hallId = undefined;
-            newApplication.hallName = undefined;
-            newApplication.orderNumber = undefined;
-            return;
-        }
-
-        const selectedHall = newAvailableHalls.find(h => h.id === selectedHallId);
-        if (selectedHall) {
-            newApplication.hallId = selectedHall.id;
-            newApplication.hallName = selectedHall.name;
-        }
     }
 
     function validateTCID(tcId: string): boolean {
@@ -970,6 +1092,24 @@
                             style="width: {Math.min(100, Math.round((assignedCount / totalCapacity) * 100))}%"
                         ></div>
                     </div>
+                    {#if schoolCapacityStats.length > 0}
+                        <div class="school-capacity-breakdown">
+                            <span class="breakdown-label">Sınav binalarına göre:</span>
+                            {#each schoolCapacityStats as stat}
+                                <div class="school-capacity-item">
+                                    <span class="school-name">{stat.schoolName}</span>
+                                    <span class="school-capacity-text">{stat.assignedCount}/{stat.totalCapacity}</span>
+                                    <span class="school-percentage">%{stat.totalCapacity > 0 ? Math.round((stat.assignedCount / stat.totalCapacity) * 100) : 0}</span>
+                                    <div class="school-progress-bar">
+                                        <div 
+                                            class="progress-fill" 
+                                            style="width: {stat.totalCapacity > 0 ? Math.min(100, Math.round((stat.assignedCount / stat.totalCapacity) * 100)) : 0}%"
+                                        ></div>
+                                    </div>
+                                </div>
+                            {/each}
+                        </div>
+                    {/if}
                 </div>
             {/if}
         </div>
@@ -983,46 +1123,39 @@
             <input
                 type="text"
                 bind:value={searchTerm}
-                placeholder="Başvuruları ara..."
+                on:input={filterApplications}
+                placeholder="Ad soyad, T.C. kimlik no, salon adı veya okul adı ile arayın..."
                 class="search-input"
             />
+            {#if applicationsWithMissingFields.size > 0}
+                <label class="incomplete-filter">
+                    <input type="checkbox" bind:checked={showOnlyIncomplete} on:change={filterApplications} />
+                    Eksik alanlı başvuruları göster ({applicationsWithMissingFields.size})
+                </label>
+            {/if}
         </div>
         
         <div class="action-groups">
             <!-- Primary Actions -->
             <div class="action-group primary-actions">
+                <span class="action-group-label">Başvuru İşlemleri</span>
                 <button on:click={() => isAddApplicationModalOpen = true} class="add-application-btn">
                     <span class="btn-icon">➕</span>
                     Başvuru Ekle
                 </button>
-                <button on:click={exportToExcel} class="excel-btn">
+                <button on:click={exportToExcel} class="excel-btn" title="Filtrelenmiş başvuruları Excel dosyası olarak indir">
                     <span class="btn-icon">📊</span>
                     Excel'e Aktar
                 </button>
-            </div>
-
-            <!-- Management Actions -->
-            <div class="action-group management-actions">
-                <a href="/admin/halls" class="halls-btn">
-                    <span class="btn-icon">🏫</span>
-                    Sınav Salonları
-                </a>
-                <button on:click={() => isAddSchoolModalOpen = true} class="add-school-btn">
+                <button on:click={() => isAddSchoolModalOpen = true} class="add-school-btn" title="Sisteme yeni bir sınav binası ekle">
                     <span class="btn-icon">🏢</span>
-                    Okul Ekle
+                    Sınav Binası Ekle
                 </button>
-                <a href="/admin/notes" class="notes-btn">
-                    <span class="btn-icon">📝</span>
-                    Sınav Notları
-                </a>
             </div>
 
             <!-- System Actions -->
             <div class="action-group system-actions">
-                <a href="/admin/settings" class="settings-btn">
-                    <span class="btn-icon">⚙️</span>
-                    Sistem Ayarları
-                </a>
+                <span class="action-group-label">Sistem</span>
                 <button 
                     on:click={async () => {
                         isRefreshing = true;
@@ -1032,13 +1165,23 @@
                     }} 
                     class="refresh-btn"
                     disabled={isRefreshing}
+                    title="Başvuru listesini Firebase'den yeniden yükle"
                 >
                     <span class="btn-icon">{isRefreshing ? '⏳' : '🔄'}</span>
                     {isRefreshing ? 'Yenileniyor...' : 'Yenile'}
                 </button>
-                <button on:click={checkOrderNumbers} class="fix-btn">
+                <button on:click={checkOrderNumbers} class="fix-btn" title="Tüm salon öğrenci sıra numaralarını kontrol edip hatalı olanları düzelt">
                     <span class="btn-icon">🔧</span>
-                    Sıra No. Kontrol
+                    Sıra No. Düzelt
+                </button>
+                <button 
+                    on:click={() => isResetRoomsModalOpen = true}
+                    class="reset-rooms-btn"
+                    disabled={isResettingRooms}
+                    title="Tüm öğrencilerin salon atamalarını sil — öğrenci kayıtları korunur"
+                >
+                    <span class="btn-icon">{isResettingRooms ? '⏳' : '🗑️'}</span>
+                    {isResettingRooms ? 'Sıfırlanıyor...' : 'Salonları Sıfırla'}
                 </button>
             </div>
         </div>
@@ -1075,8 +1218,9 @@
                         on:keydown={(e) => e.key === 'Enter' && handleSort('schoolName')}
                         role="button"
                         tabindex="0"
+                        title="Öğrencinin sınava gireceği bina"
                     >
-                        Okul
+                        Sınav Binası
                         {#if sortField === 'schoolName'}
                             <span class="sort-indicator">{sortDirection === 'asc' ? '↑' : '↓'}</span>
                         {/if}
@@ -1130,7 +1274,7 @@
             </thead>
             <tbody>
                 {#each filteredApplications as application}
-                    <tr>
+                    <tr class:incomplete-row={applicationsWithMissingFields.has(application.tcId)}>
                         <td>{application.tcId}</td>
                         <td>{application.studentFullName}</td>
                         <td>{application.schoolName}</td>
@@ -1180,10 +1324,11 @@
                         required
                         on:input={(e) => handleNameInput(e, 'studentFullName')}
                     />
+                    <small class="helper-text">Otomatik olarak büyük harfe dönüştürülür</small>
                 </div>
 
                 <div class="form-group">
-                    <label for="studentSchoolName">Öğrencinin Okulu</label>
+                    <label for="studentSchoolName">Öğrencinin Kayıtlı Olduğu Okul</label>
                     <div class="school-input-container">
                         <select
                             id="studentSchoolName"
@@ -1217,18 +1362,19 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="schoolName">Sınav Binası</label>
+                    <label for="schoolName">Sınav Yapılacak Bina</label>
                     <select
                         id="schoolName"
                         bind:value={editFormData.schoolId}
                         required
                         on:change={handleSchoolChange}
                     >
-                        <option value="">Okul seçiniz</option>
+                        <option value="">Sınav binasını seçin</option>
                         {#each schools as school}
                             <option value={school.id}>{school.name}</option>
                         {/each}
                     </select>
+                    <small class="helper-text">Öğrencinin sınava gireceği bina — bina seçildikten sonra salon listesi güncellenir</small>
                 </div>
 
                 <div class="form-group">
@@ -1240,10 +1386,11 @@
                         required
                         on:input={(e) => handleNameInput(e, 'parentFullName')}
                     />
+                    <small class="helper-text">Otomatik olarak büyük harfe dönüştürülür</small>
                 </div>
 
                 <div class="form-group">
-                    <label for="phoneNumber">Telefon</label>
+                    <label for="phoneNumber">Telefon Numarası</label>
                     <input
                         type="text"
                         id="phoneNumber"
@@ -1252,6 +1399,7 @@
                         minlength="10"
                         maxlength="10"
                     />
+                    <small class="helper-text">Başında 0 olmadan 10 haneli giriniz (örn: 5321234567)</small>
                 </div>
 
                 <div class="form-group">
@@ -1268,13 +1416,15 @@
                     </select>
                     {#if editFormData.hallId}
                         <small class="helper-text">
-                            Kapasite: {availableHalls.find(h => h.id === editFormData.hallId)?.capacity || 0}
+                            Salon kapasitesi: {availableHalls.find(h => h.id === editFormData.hallId)?.capacity || 0} öğrenci
                         </small>
+                    {:else}
+                        <small class="helper-text">Önce sınav binasını seçin</small>
                     {/if}
                 </div>
 
                 <div class="form-group">
-                    <label for="orderNumber">Sıra No</label>
+                    <label for="orderNumber">Oturma Sıra Numarası</label>
                     <input
                         type="number"
                         id="orderNumber"
@@ -1282,6 +1432,7 @@
                         min="1"
                         disabled={!editFormData.hallId}
                     />
+                    <small class="helper-text">Boş bırakılırsa salonun sonuna otomatik eklenir</small>
                 </div>
 
                 <div class="modal-actions">
@@ -1311,17 +1462,19 @@
             on:keydown|stopPropagation
             role="presentation"
         >
-            <h2>Okul Ekle</h2>
+            <h2>Sınav Binası Ekle</h2>
+            <p class="modal-description">Sisteme yeni bir sınav binası ekleyin. Eklendikten sonra bu binaya salonlar tanımlayabilirsiniz.</p>
             <form on:submit|preventDefault={handleAddSchool}>
                 <div class="form-group">
-                    <label for="schoolName">Okul Adı</label>
+                    <label for="schoolName">Bina Adı</label>
                     <input
                         type="text"
                         id="schoolName"
                         bind:value={newSchoolName}
                         required
-                        placeholder="Okul adını giriniz"
+                        placeholder="Örn: Atatürk Anadolu Lisesi"
                     />
+                    <small class="helper-text">Tam ve resmi adını giriniz</small>
                 </div>
 
                 <div class="modal-actions">
@@ -1378,6 +1531,44 @@
     </div>
 {/if}
 
+{#if isResetRoomsModalOpen}
+    <div 
+        class="modal-overlay" 
+        on:click={() => isResetRoomsModalOpen = false}
+        on:keydown={(e) => e.key === 'Escape' && (isResetRoomsModalOpen = false)}
+        role="button"
+        tabindex="0"
+    >
+        <div 
+            class="modal delete-confirmation-modal" 
+            on:click|stopPropagation
+            on:keydown|stopPropagation
+            role="presentation"
+        >
+            <div class="delete-icon">
+                <span>!</span>
+            </div>
+            <h2>Salonları Sıfırla</h2>
+            <p class="delete-message">
+                Tüm öğrencilerin salon ve sıra numarası atamaları silinecektir.
+            </p>
+            <p class="delete-warning">Bu işlem geri alınamaz! Öğrenci kayıtları silinmez, yalnızca salon atamaları temizlenir.</p>
+            <div class="modal-actions">
+                <button 
+                    type="button" 
+                    class="cancel-btn" 
+                    on:click={() => isResetRoomsModalOpen = false}
+                >
+                    İptal
+                </button>
+                <button type="button" class="confirm-delete-btn" on:click={resetAllRooms}>
+                    Sıfırla
+                </button>
+            </div>
+        </div>
+    </div>
+{/if}
+
 {#if isAddApplicationModalOpen}
     <div 
         class="modal-overlay" 
@@ -1393,9 +1584,10 @@
             role="presentation"
         >
             <h2>Yeni Başvuru Ekle</h2>
+            <p class="modal-description">Yeni bir öğrenci başvurusu oluşturun. Tüm alanlar zorunludur.</p>
             <form on:submit|preventDefault={handleAddApplication}>
                 <div class="form-group">
-                    <label for="newTcId">T.C. Kimlik No</label>
+                    <label for="newTcId">T.C. Kimlik Numarası</label>
                     <input
                         type="text"
                         id="newTcId"
@@ -1403,7 +1595,7 @@
                         required
                         inputmode="numeric"
                         on:input={(e) => handleTCKNInput(e, true)}
-                        placeholder="T.C. Kimlik Numaranızı giriniz"
+                        placeholder="11 haneli T.C. kimlik numarası"
                     />
                     {#if legalErrors.tckn}
                         <div class="error-message">{legalErrors.tckn}</div>
@@ -1418,9 +1610,11 @@
                         bind:value={newApplication.studentFullName}
                         required
                         on:input={(e) => handleNewNameInput(e, 'studentFullName')}
+                        placeholder="Nüfus cüzdanındaki isim ile aynı olmalı"
                     />
+                    <small class="helper-text">Otomatik olarak büyük harfe dönüştürülür</small>
                 </div>
-                   <div class="form-group">
+                <div class="form-group">
                     <label for="newParentFullName">Veli Adı Soyadı</label>
                     <input
                         type="text"
@@ -1428,22 +1622,25 @@
                         bind:value={newApplication.parentFullName}
                         required
                         on:input={(e) => handleNewNameInput(e, 'parentFullName')}
+                        placeholder="Anne veya baba adı soyadı"
                     />
+                    <small class="helper-text">Otomatik olarak büyük harfe dönüştürülür</small>
                 </div>
-                 
 
                 <div class="form-group">
-                    <label for="newPhoneNumber">Telefon</label>
+                    <label for="newPhoneNumber">Veli Telefon Numarası</label>
                     <input
                         type="text"
                         id="newPhoneNumber"
                         bind:value={newApplication.phoneNumber}
                         required
+                        placeholder="5321234567"
                     />
+                    <small class="helper-text">Başında 0 olmadan 10 haneli giriniz</small>
                 </div>
 
                 <div class="form-group">
-                    <label for="newStudentSchoolName">Öğrencinin Okulu</label>
+                    <label for="newStudentSchoolName">Öğrencinin Kayıtlı Olduğu Okul</label>
                     <div class="school-input-container">
                         <select
                             id="newStudentSchoolName"
@@ -1474,43 +1671,7 @@
                             </div>
                         {/if}
                     </div>
-                </div>
-
-                <div class="form-group">
-                    <label for="newSchoolName">Sınav Binası</label>
-                    <select
-                        id="newSchoolName"
-                        bind:value={newApplication.schoolId}
-                        required
-                        on:change={handleNewSchoolChange}
-                    >
-                        <option value="">Okul seçiniz</option>
-                        {#each schools as school}
-                            <option value={school.id}>{school.name}</option>
-                        {/each}
-                    </select>
-                </div>
-
-            
-
-                <div class="form-group">
-                    <label for="newHallId">Sınav Salonu</label>
-                    <select
-                        id="newHallId"
-                        bind:value={newApplication.hallId}
-                        required
-                        on:change={handleNewHallChange}
-                    >
-                        <option value="">Sınav salonu seçiniz</option>
-                        {#each newAvailableHalls as hall}
-                            <option value={hall.id}>{hall.name}</option>
-                        {/each}
-                    </select>
-                    {#if newApplication.hallId}
-                        <small class="helper-text">
-                            Kapasite: {newAvailableHalls.find(h => h.id === newApplication.hallId)?.capacity || 0}
-                        </small>
-                    {/if}
+                    <small class="helper-text">Sınav binası ve salon otomatik olarak atanacaktır (öncelik ve kapasiteye göre)</small>
                 </div>
 
                 <div class="modal-actions">
@@ -1658,6 +1819,62 @@
         animation: shimmer 2s infinite;
     }
 
+    .school-capacity-breakdown {
+        margin-top: 1.25rem;
+        padding-top: 1.25rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    .breakdown-label {
+        display: block;
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: rgba(255, 255, 255, 0.8);
+        margin-bottom: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .school-capacity-item {
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        gap: 0.5rem 1rem;
+        align-items: center;
+        margin-bottom: 0.5rem;
+    }
+
+    .school-capacity-item:last-child {
+        margin-bottom: 0;
+    }
+
+    .school-name {
+        font-size: 0.95rem;
+        color: rgba(255, 255, 255, 0.9);
+    }
+
+    .school-capacity-text {
+        font-size: 0.9rem;
+        font-weight: 500;
+        color: rgba(255, 255, 255, 0.85);
+    }
+
+    .school-percentage {
+        font-size: 0.85rem;
+        font-weight: 600;
+        padding: 0.2rem 0.5rem;
+        background: rgba(255, 255, 255, 0.15);
+        border-radius: 8px;
+    }
+
+    .school-progress-bar {
+        grid-column: 1 / -1;
+        width: 100%;
+        height: 6px;
+        background: rgba(255, 255, 255, 0.15);
+        border-radius: 4px;
+        overflow: hidden;
+    }
+
     @keyframes shimmer {
         0% {
             transform: translateX(-100%);
@@ -1684,10 +1901,29 @@
 
     .search-section {
         width: 100%;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 1rem;
+    }
+
+    .incomplete-filter {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.875rem;
+        color: #b45309;
+        cursor: pointer;
+        white-space: nowrap;
+    }
+
+    .incomplete-row {
+        background: #fffbeb;
     }
 
     .search-input {
-        width: 100%;
+        flex: 1;
+        min-width: 200px;
         padding: 1rem;
         border: 2px solid #e2e8f0;
         border-radius: 12px;
@@ -1722,6 +1958,18 @@
         border: 1px solid #e2e8f0;
         min-width: 250px;
         flex: 1;
+        position: relative;
+    }
+
+    .action-group-label {
+        width: 100%;
+        font-size: 0.7rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: #718096;
+        padding-bottom: 0.25rem;
+        border-bottom: 1px solid rgba(0,0,0,0.08);
     }
 
     .action-group::before {
@@ -1744,16 +1992,6 @@
         background: linear-gradient(to right, #0d9488, #115e59);
     }
 
-    .management-actions {
-        position: relative;
-        background: linear-gradient(145deg, #f0fff4, #c6f6d5);
-        border-color: #9ae6b4;
-    }
-
-    .management-actions::before {
-        background: linear-gradient(to right, #38a169, #2f855a);
-    }
-
     .system-actions {
         position: relative;
         background: linear-gradient(145deg, #faf5ff, #e9d8fd);
@@ -1765,8 +2003,7 @@
     }
 
     /* Base button styles */
-    .action-group button,
-    .action-group a {
+    .action-group button {
         display: inline-flex;
         align-items: center;
         gap: 0.5rem;
@@ -1782,8 +2019,7 @@
         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
     }
 
-    .action-group button:hover,
-    .action-group a:hover {
+    .action-group button:hover {
         transform: translateY(-2px);
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
     }
@@ -1812,16 +2048,7 @@
         background: linear-gradient(135deg, #047857, #065f46);
     }
 
-    /* Management action buttons */
-    .halls-btn {
-        background: linear-gradient(135deg, #38a169, #2f855a);
-        color: white;
-    }
-
-    .halls-btn:hover {
-        background: linear-gradient(135deg, #2f855a, #276749);
-    }
-
+    /* Primary action buttons (continued) */
     .add-school-btn {
         background: linear-gradient(135deg, #319795, #2c7a7b);
         color: white;
@@ -1831,25 +2058,7 @@
         background: linear-gradient(135deg, #2c7a7b, #285e61);
     }
 
-    .notes-btn {
-        background: linear-gradient(135deg, #d69e2e, #b7791f);
-        color: white;
-    }
-
-    .notes-btn:hover {
-        background: linear-gradient(135deg, #b7791f, #975a16);
-    }
-
     /* System action buttons */
-    .settings-btn {
-        background: linear-gradient(135deg, #805ad5, #6b46c1);
-        color: white;
-    }
-
-    .settings-btn:hover {
-        background: linear-gradient(135deg, #6b46c1, #553c9a);
-    }
-
     .refresh-btn {
         background: linear-gradient(135deg, #14b8a6, #0d9488);
         color: white;
@@ -1866,6 +2075,20 @@
 
     .fix-btn:hover {
         background: linear-gradient(135deg, #dd6b20, #c05621);
+    }
+
+    .reset-rooms-btn {
+        background: linear-gradient(135deg, #e53e3e, #c53030);
+        color: white;
+    }
+
+    .reset-rooms-btn:hover:not(:disabled) {
+        background: linear-gradient(135deg, #c53030, #9b2c2c);
+    }
+
+    .reset-rooms-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
     }
 
     .table-container {
@@ -1986,8 +2209,16 @@
     }
 
     .modal h2 {
-        margin-bottom: 1.5rem;
+        margin-bottom: 0.5rem;
         color: #2d3748;
+    }
+
+    .modal-description {
+        color: #718096;
+        font-size: 0.9rem;
+        margin-bottom: 1.5rem;
+        padding-bottom: 1rem;
+        border-bottom: 1px solid #e2e8f0;
     }
 
     .form-group {
@@ -2188,8 +2419,7 @@
             padding: 0.75rem;
         }
 
-        .action-group button,
-        .action-group a {
+        .action-group button {
             flex: 1;
             justify-content: center;
             padding: 0.75rem;

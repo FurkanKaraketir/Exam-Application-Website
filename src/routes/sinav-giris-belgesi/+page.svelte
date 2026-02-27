@@ -1,5 +1,6 @@
 <script lang="ts">
     import { db } from '$lib/firebase';
+    import { getBarcodeBase64, getBarcodeUrl } from '$lib/barcode';
     import { doc, getDoc } from 'firebase/firestore';
     import { fade, fly } from 'svelte/transition';
     import { jsPDF } from 'jspdf';
@@ -47,6 +48,7 @@
     let isCustomSchool = false;
     let customSchoolName = '';
     let notes: string[] = [];
+    let barcodeDisplayUrl = '';
 
     function validateTCID(tcId: string): boolean {
         // Basic format checks
@@ -123,15 +125,15 @@
             if (examDocSnap.exists()) {
                 const data = examDocSnap.data();
                 examData = {
-                    tcId: data.tcId,
-                    studentFullName: data.studentFullName,
-                    studentSchoolName: data.studentSchoolName,
-                    parentFullName: data.parentFullName,
-                    phoneNumber: data.phoneNumber,
-                    schoolName: data.schoolName,
-                    hallName: data.hallName,
-                    orderNumber: data.orderNumber,
-                    schoolId: data.schoolId
+                    tcId: data.tcId || '',
+                    studentFullName: data.studentFullName || '',
+                    studentSchoolName: data.studentSchoolName || '',
+                    parentFullName: data.parentFullName || '',
+                    phoneNumber: data.phoneNumber || '',
+                    schoolName: data.schoolName || '',
+                    hallName: data.hallName || '',
+                    orderNumber: data.orderNumber ?? 0,
+                    schoolId: data.schoolId || ''
                 };
             } else {
                 showNotification('Bu TC Kimlik numarası ile başvuru bulunamadı.', 'error');
@@ -146,6 +148,9 @@
                 return;
             }
 
+            // Load barcode URL for display (admin-managed or static fallback)
+            barcodeDisplayUrl = await getBarcodeUrl(examData.schoolId);
+
             // Directly navigate to results page
             // goto('/results');
         } catch (error) {
@@ -155,7 +160,7 @@
         loading = false;
     }
 
-    function downloadExamDocument() {
+    async function downloadExamDocument() {
         if (!examData) return;
 
         // Create new PDF document
@@ -287,8 +292,11 @@
         });
         
         const qr_location = 160;
-        // Add QR code for school location
-        doc.addImage(`/${examData.schoolId}.png`, 'PNG', 155, qr_location, 30, 30);
+        // Add QR code for school location (from admin-managed barcode or static fallback)
+        const barcodeBase64 = await getBarcodeBase64(examData.schoolId);
+        if (barcodeBase64) {
+            doc.addImage(barcodeBase64, 'PNG', 155, qr_location, 30, 30);
+        }
         doc.setFontSize(10);
         doc.setFont("DejaVuSans", "bold");
         doc.setTextColor(0, 51, 102);
@@ -363,7 +371,7 @@
                     resultsReleaseDate: data.resultsReleaseDate || '',
                     applicationEnabled: data.applicationEnabled || false,
                     resultsEnabled: data.resultsEnabled || false,
-                    currentYear: data.currentYear || 2025,
+                    currentYear: data.currentYear || 2026,
                     currentPhase: data.currentPhase || 'application',
                     resultsFileUrl: data.resultsFileUrl || '',
                     lastUpdated: data.lastUpdated?.toDate() || new Date()
@@ -446,6 +454,10 @@
             {#if examData}
                 <div class="exam-info" transition:fade>
                     <h2>Sınav Bilgileri</h2>
+                    <button class="download-btn" on:click={downloadExamDocument}>
+                        <span class="download-icon">⬇</span>
+                        SINAV GİRİŞ BELGESİNİ İNDİR
+                    </button>
                     <div class="info-grid">
                         <div class="info-item">
                             <span class="label">Ad Soyad:</span>
@@ -465,7 +477,7 @@
                         </div>
                         <div class="info-item">
                             <span class="label">Sınav Tarihi:</span>
-                            <span class="value">19.04.2025</span>
+                            <span class="value">18.04.2026</span>
                         </div>
                         <div class="info-item">
                             <span class="label">Sınav Binası:</span>
@@ -482,16 +494,12 @@
                     </div>
                     <div class="qr-section">
                         <img 
-                            src="/{examData.schoolId}.png" 
+                            src={barcodeDisplayUrl || `/${examData.schoolId}.png`} 
                             alt="Okul Konumu QR Kodu"
                             class="qr-code"
                         />
                         <span class="qr-label">Okul Konumu QR Kodu</span>
                     </div>
-                    <button class="download-btn" on:click={downloadExamDocument}>
-                        <span class="icon">📄</span>
-                        SINAV GİRİŞ BELGESİNİ İNDİR
-                    </button>
                 </div>
             {/if}
         </div>
@@ -549,7 +557,7 @@
         background-color: #ffffff;
     }
     
-    .submit-btn, .download-btn {
+    .submit-btn {
         background: linear-gradient(to right, #0d9488, #115e59);
         color: white;
         padding: 1rem;
@@ -567,16 +575,47 @@
         justify-content: center;
         gap: 0.5rem;
     }
+
+    .download-btn {
+        background: linear-gradient(135deg, #0d9488, #115e59);
+        color: white;
+        padding: 1rem 1.5rem;
+        border: none;
+        border-radius: 10px;
+        font-size: 1.05rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        margin-bottom: 1.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.625rem;
+        width: 100%;
+        box-shadow: 0 4px 14px rgba(13, 148, 136, 0.35);
+    }
+
+    .download-icon {
+        font-size: 1.2rem;
+    }
     
     .submit-btn:disabled {
         background: #cbd5e0;
         cursor: not-allowed;
     }
     
-    .submit-btn:not(:disabled):hover, .download-btn:hover {
+    .submit-btn:not(:disabled):hover {
         background: linear-gradient(to right, #115e59, #134e4a);
         transform: translateY(-1px);
         box-shadow: 0 4px 12px rgba(13, 148, 136, 0.2);
+    }
+
+    .download-btn:hover {
+        background: linear-gradient(135deg, #0f766e, #134e4a);
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(13, 148, 136, 0.45);
     }
     
     .submit-btn:active, .download-btn:active {
@@ -782,9 +821,14 @@
             font-size: 0.95rem;
         }
 
-        .submit-btn, .download-btn {
+        .submit-btn {
             padding: 0.875rem;
             font-size: 1rem;
+        }
+
+        .download-btn {
+            padding: 0.875rem 1.25rem;
+            font-size: 0.95rem;
         }
 
         .notifications {

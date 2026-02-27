@@ -132,7 +132,7 @@
                     resultsReleaseDate: data.resultsReleaseDate || '',
                     applicationEnabled: data.applicationEnabled || false,
                     resultsEnabled: data.resultsEnabled || false,
-                    currentYear: data.currentYear || 2025,
+                    currentYear: data.currentYear || 2026,
                     currentPhase: data.currentPhase || 'application',
                     resultsFileUrl: data.resultsFileUrl || '',
                     lastUpdated: data.lastUpdated?.toDate() || new Date()
