@@ -8,7 +8,7 @@
     interface EventField {
         key: string;
         label: string;
-        type: 'text' | 'email' | 'phone' | 'number' | 'select';
+        type: 'text' | 'email' | 'phone' | 'number' | 'float' | 'select';
         required: boolean;
         options?: string[];
     }
@@ -37,6 +37,7 @@
         { value: 'email', label: 'E-posta' },
         { value: 'phone', label: 'Telefon' },
         { value: 'number', label: 'Sayı' },
+        { value: 'float', label: 'Ondalık Sayı' },
         { value: 'select', label: 'Seçenek Listesi' }
     ] as const;
 
@@ -281,6 +282,21 @@
         }
     }
 
+    async function deleteApplication(eventId: string, appId: string) {
+        if (!confirm('Bu başvuruyu silmek istediğinize emin misiniz?')) return;
+        try {
+            await deleteDoc(doc(db, 'eventApplications', appId));
+            applicationsByEvent = {
+                ...applicationsByEvent,
+                [eventId]: (applicationsByEvent[eventId] || []).filter(a => a.id !== appId)
+            };
+            showNotification('Başvuru silindi.');
+        } catch (e) {
+            console.error('deleteApplication error:', e);
+            showNotification('Başvuru silinirken hata oluştu.', 'error');
+        }
+    }
+
     async function deleteEvent(event: Event) {
         if (!confirm(`"${event.name}" etkinliğini silmek istediğinize emin misiniz?`)) return;
 
@@ -468,6 +484,7 @@
                                                 {#each (event.fields || []) as f}
                                                     <th>{f.label}</th>
                                                 {/each}
+                                                <th></th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -477,6 +494,9 @@
                                                     {#each (event.fields || []) as f}
                                                         <td>{String(app[f.key] ?? '-')}</td>
                                                     {/each}
+                                                    <td class="app-delete-cell">
+                                                        <button class="btn-icon danger" title="Başvuruyu sil" on:click={() => deleteApplication(event.id, app.id)}>🗑️</button>
+                                                    </td>
                                                 </tr>
                                             {/each}
                                         </tbody>
@@ -805,6 +825,7 @@
     .applications-preview table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
     .applications-preview th, .applications-preview td { padding: 0.5rem; border-bottom: 1px solid #e2e8f0; text-align: left; }
     .applications-preview th { background: #f8fafc; color: #475569; font-weight: 600; }
+    .app-delete-cell { width: 2rem; text-align: center; white-space: nowrap; }
 
     .modal-overlay {
         position: fixed;

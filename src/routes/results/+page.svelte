@@ -1,8 +1,10 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import * as XLSX from 'xlsx';
-    import { db } from '$lib/firebase';
+    import { db, auth } from '$lib/firebase';
     import { doc, getDoc } from 'firebase/firestore';
+    import { onAuthStateChanged } from 'firebase/auth';
+    import { jsPDF } from 'jspdf';
 
     // System settings interface
     interface SystemSettings {
@@ -61,11 +63,16 @@
         { name: 'FEN BİLİMLERİ', indices: { doğru: 22, yanlış: 23, boş: 24, net: 25 } }
     ];
 
+    // Indices based on the 2026_results.xlsx structure (2 header rows skipped):
+    // cols 0-1: Ad Soyad, Kimlik No
+    // cols 2-25: subject Doğru/Yanlış/Boş/Net groups (6 subjects × 4)
+    // cols 26-28: TOPLAM Doğru/Yanlış/Boş
+    // col 29: Toplam Net, col 30: Puan, col 31: Sıralamalar, col 32: Durum
     const OVERALL_INFO = [
-        { name: 'Toplam Net', index: 26 },
-        { name: 'Puan', index: 27 },
-        { name: 'Sıralama', index: 28 },
-        { name: 'Durumu', index: 29 }
+        { name: 'Toplam Net', index: 29 },
+        { name: 'Puan', index: 30 },
+        { name: 'Sıralama', index: 31 },
+        { name: 'Durumu', index: 32 }
     ];
 
     let allResults: any[][] = []; // Store as array of arrays
@@ -92,6 +99,16 @@
 
     // Results release time - will be loaded from system settings
     let RESULTS_RELEASE_DATE: Date | null = null;
+
+    // Admin state
+    let isAdmin = false;
+    let adminEarlyAccess = false;
+
+    // Registration info loaded from Firestore
+    const DEFAULT_ASIL_TEXT = 'Asil Kayıt Hakkı kazandınız. Kayıt işlemleri için 30 Nisan tarihine kadar okul müdürlüğüne başvurmanız gerekmektedir.';
+    const DEFAULT_YEDEK_TEXT = 'Yedek Kayıt Hakkı kazandınız. Yedek kayıtlar 2 Mayıs tarihinden itibaren kontenjan dahilinde sırası ile davet edilecektir. Okul duyurularını takip ediniz.';
+    let asilRegistrationText = DEFAULT_ASIL_TEXT;
+    let yedekRegistrationText = DEFAULT_YEDEK_TEXT;
 
     // Function to fetch current time from server-side API
     async function fetchCurrentTime(): Promise<Date> {
@@ -152,6 +169,19 @@
         } finally {
             isLoadingSettings = false;
         }
+
+        // Load registration info in parallel
+        try {
+            const regRef = doc(db, 'general', 'registrationInfo');
+            const regSnap = await getDoc(regRef);
+            if (regSnap.exists()) {
+                const d = regSnap.data();
+                asilRegistrationText = d.asilText || DEFAULT_ASIL_TEXT;
+                yedekRegistrationText = d.yedekText || DEFAULT_YEDEK_TEXT;
+            }
+        } catch (_) {
+            // Fallback to defaults on error — already set
+        }
     }
 
     function updateCountdown() {
@@ -183,6 +213,10 @@
     }
 
     onMount(() => {
+        const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+            isAdmin = !!user;
+        });
+
         let countdownInterval: NodeJS.Timeout;
 
         async function initializeTime() {
@@ -219,11 +253,12 @@
 
         initializeTime();
 
-        // Cleanup interval on component destroy
+        // Cleanup interval and auth listener on component destroy
         return () => {
             if (countdownInterval) {
                 clearInterval(countdownInterval);
             }
+            unsubscribeAuth();
         };
     });
 
@@ -240,7 +275,7 @@
             // Use header: 1 to get array of arrays, easier to map later
             const jsonData: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
 
-            if (jsonData.length > 1) { // Need at least header + 1 data row
+            if (jsonData.length > 2) { // Need at least 2 header rows + 1 data row
                 // const fileHeaders = jsonData[0].map(String); // No longer reading headers
                 // tcColumnIndex = fileHeaders.indexOf(TC_COLUMN_HEADER); // Removed dynamic lookup
                 //
@@ -251,8 +286,8 @@
                 // Directly use the predefined index based on the image structure
                 tcColumnIndex = TC_COLUMN_INDEX_IN_FILE;
 
-                // Store all result rows as arrays, skipping the header row
-                allResults = jsonData.slice(1);
+                // Skip 2 header rows: row 0 = merged subject headers, row 1 = column names
+                allResults = jsonData.slice(2);
 
             } else {
                 error = "Sonuç dosyası boş veya geçersiz formatta.";
@@ -313,6 +348,184 @@
         }
     }
 
+    async function downloadResultDocument() {
+        if (!searchedResult) return;
+
+        const studentName = formatValue(searchedResult[NAME_COLUMN_INDEX]);
+        const tcId = formatValue(searchedResult[TC_COLUMN_INDEX_IN_FILE]);
+        const status = formatValue(searchedResult[OVERALL_INFO[3].index]);
+
+        const pdfdoc = new jsPDF();
+
+        pdfdoc.addFont('/fonts/DejaVuSans.ttf', 'DejaVuSans', 'normal');
+        pdfdoc.addFont('/fonts/DejaVuSans-Bold.ttf', 'DejaVuSans', 'bold');
+        pdfdoc.setFont('DejaVuSans');
+
+        // Outer border
+        pdfdoc.setDrawColor(0, 51, 102);
+        pdfdoc.setLineWidth(0.5);
+        pdfdoc.rect(10, 10, 190, 277);
+
+        // Header box
+        pdfdoc.rect(15, 15, 180, 20);
+
+        // Logos
+        pdfdoc.addImage('/favicon.png', 'PNG', 17, 17, 15, 15);
+        pdfdoc.addImage('/favicon.png', 'PNG', 178, 17, 15, 15);
+
+        // Title
+        pdfdoc.setFontSize(16);
+        pdfdoc.setFont('DejaVuSans', 'bold');
+        pdfdoc.setTextColor(0, 51, 102);
+        pdfdoc.text('SINAV SONUÇ BELGESİ', 105, 27, { align: 'center' });
+
+        // ── Student info ──────────────────────────────────────────────
+        pdfdoc.setFontSize(13);
+        pdfdoc.text('ÖĞRENCİ BİLGİLERİ', 25, 50);
+        pdfdoc.setDrawColor(0, 51, 102);
+        pdfdoc.line(25, 53, 185, 53);
+        pdfdoc.setTextColor(0, 0, 0);
+
+        pdfdoc.setFontSize(11);
+        const studentInfo = [
+            ['T.C. Kimlik No', ':', tcId],
+            ['Ad Soyad', ':', studentName],
+            ['Sınav Tarihi', ':', systemSettings?.examDate ? new Date(systemSettings.examDate).toLocaleDateString('tr-TR') : 'Henüz belirlenmedi'],
+            ['Sınav Yılı', ':', String(systemSettings?.currentYear ?? new Date().getFullYear())]
+        ];
+
+        let y = 65;
+        studentInfo.forEach(([label, sep, value]) => {
+            pdfdoc.setFont('DejaVuSans', 'bold');
+            pdfdoc.text(label, 25, y);
+            pdfdoc.text(sep, 72, y);
+            pdfdoc.setFont('DejaVuSans', 'normal');
+            const lines = pdfdoc.splitTextToSize(value, 110);
+            lines.forEach((line: string, i: number) => pdfdoc.text(line, 77, y + i * 6));
+            y += 12 + (lines.length - 1) * 6;
+        });
+
+        // ── Overall results ───────────────────────────────────────────
+        pdfdoc.setFontSize(13);
+        pdfdoc.setFont('DejaVuSans', 'bold');
+        pdfdoc.setTextColor(0, 51, 102);
+        pdfdoc.text('GENEL SONUÇ', 25, y + 6);
+        pdfdoc.line(25, y + 9, 185, y + 9);
+        pdfdoc.setTextColor(0, 0, 0);
+
+        y += 18;
+        pdfdoc.setFontSize(11);
+        const overallRows = [
+            ['Toplam Net', ':', formatValue(searchedResult[OVERALL_INFO[0].index])],
+            ['Puan',        ':', formatValue(searchedResult[OVERALL_INFO[1].index])],
+            ['Sıralama',    ':', formatValue(searchedResult[OVERALL_INFO[2].index])],
+            ['Durumu',      ':', status]
+        ];
+
+        overallRows.forEach(([label, sep, value]) => {
+            pdfdoc.setFont('DejaVuSans', 'bold');
+            pdfdoc.text(label, 25, y);
+            pdfdoc.text(sep, 72, y);
+            pdfdoc.setFont('DejaVuSans', 'normal');
+
+            if (label === 'Durumu') {
+                if (value.includes('Asil'))        pdfdoc.setTextColor(22, 163, 74);
+                else if (value.includes('Yedek'))  pdfdoc.setTextColor(234, 88, 12);
+                else if (value.includes('Kazanamadı')) pdfdoc.setTextColor(220, 38, 38);
+                else pdfdoc.setTextColor(0, 0, 0);
+            }
+
+            const lines = pdfdoc.splitTextToSize(value, 110);
+            lines.forEach((line: string, i: number) => pdfdoc.text(line, 77, y + i * 6));
+            pdfdoc.setTextColor(0, 0, 0);
+            y += 12 + (lines.length - 1) * 6;
+        });
+
+        // ── Registration info (inside Genel Sonuç) ───────────────────
+        const registrationText = status.includes('Asil Kayıt Hakkı Kazandınız')
+            ? asilRegistrationText
+            : status.includes('Yedek Kayıt Hakkı Kazandınız')
+                ? yedekRegistrationText
+                : null;
+
+        if (registrationText) {
+            const isAsil = status.includes('Asil');
+            if (isAsil) {
+                pdfdoc.setFillColor(240, 253, 244);
+                pdfdoc.setDrawColor(134, 239, 172);
+            } else {
+                pdfdoc.setFillColor(255, 247, 237);
+                pdfdoc.setDrawColor(253, 186, 116);
+            }
+            pdfdoc.setFontSize(10);
+            pdfdoc.setFont('DejaVuSans', 'normal');
+            const regLines = pdfdoc.splitTextToSize(registrationText, 152);
+            const boxHeight = regLines.length * 6 + 8;
+            pdfdoc.roundedRect(25, y - 4, 160, boxHeight, 3, 3, 'FD');
+            if (isAsil) pdfdoc.setTextColor(21, 128, 61);
+            else        pdfdoc.setTextColor(194, 65, 12);
+            const textBlockHeight = (regLines.length - 1) * 6;
+            const boxCenterY = (y - 4) + boxHeight / 2;
+            const textStartY = boxCenterY - textBlockHeight / 2;
+            regLines.forEach((line: string, i: number) => pdfdoc.text(line, 105, textStartY + i * 6, { align: 'center' }));
+            pdfdoc.setTextColor(0, 0, 0);
+            pdfdoc.setDrawColor(0, 51, 102);
+            pdfdoc.setFillColor(255, 255, 255);
+            y += boxHeight + 6;
+        }
+
+        // ── Subject scores table ──────────────────────────────────────
+        pdfdoc.setFontSize(13);
+        pdfdoc.setFont('DejaVuSans', 'bold');
+        pdfdoc.setTextColor(0, 51, 102);
+        pdfdoc.text('DERS BAZLI PUANLAR', 25, y + 6);
+        pdfdoc.line(25, y + 9, 185, y + 9);
+        pdfdoc.setTextColor(0, 0, 0);
+        y += 18;
+
+        // Table header
+        pdfdoc.setFontSize(9);
+        pdfdoc.setFont('DejaVuSans', 'bold');
+        pdfdoc.setFillColor(230, 240, 255);
+        pdfdoc.rect(25, y - 5, 160, 8, 'FD');
+        pdfdoc.text('DERS', 27, y);
+        pdfdoc.text('DOĞRU', 95, y);
+        pdfdoc.text('YANLIŞ', 115, y);
+        pdfdoc.text('BOŞ', 138, y);
+        pdfdoc.text('NET', 158, y);
+        y += 8;
+
+        // Table rows
+        pdfdoc.setFont('DejaVuSans', 'normal');
+        SUBJECTS.forEach((subject, idx) => {
+            if (idx % 2 === 0) {
+                pdfdoc.setFillColor(247, 250, 252);
+                pdfdoc.rect(25, y - 5, 160, 8, 'F');
+            }
+            pdfdoc.setFontSize(8);
+            pdfdoc.text(subject.name, 27, y);
+            pdfdoc.text(formatValue(searchedResult![subject.indices.doğru]), 97, y);
+            pdfdoc.text(formatValue(searchedResult![subject.indices.yanlış]), 117, y);
+            pdfdoc.text(formatValue(searchedResult![subject.indices.boş]), 139, y);
+            pdfdoc.text(formatValue(searchedResult![subject.indices.net]), 159, y);
+            y += 9;
+        });
+
+        pdfdoc.setDrawColor(0, 51, 102);
+        pdfdoc.line(25, y - 1, 185, y - 1);
+
+        // ── Footer ────────────────────────────────────────────────────
+        pdfdoc.setFontSize(8);
+        pdfdoc.setFont('DejaVuSans', 'normal');
+        pdfdoc.setTextColor(100, 100, 100);
+        pdfdoc.text(
+            `Bu belge ${new Date().toLocaleDateString('tr-TR')} tarihinde oluşturulmuştur.`,
+            105, 282, { align: 'center' }
+        );
+
+        pdfdoc.save(`sinav_sonuc_belgesi_${tcId}.pdf`);
+    }
+
 </script>
 
 <main class="container">
@@ -350,10 +563,21 @@
                 Sonuç açıklama tarihi henüz belirlenmemiş.
             {/if}
         </div>
+        {#if isAdmin}
+            <div class="admin-early-access">
+                <button class="admin-early-btn" on:click={() => adminEarlyAccess = !adminEarlyAccess}>
+                    <span class="admin-btn-icon">🔑</span>
+                    {adminEarlyAccess ? 'Erken Erişimi Kapat' : 'Yönetici Erken Erişim'}
+                </button>
+                {#if adminEarlyAccess}
+                    <span class="admin-badge">Yönetici önizlemesi — kullanıcılara görünmez</span>
+                {/if}
+            </div>
+        {/if}
     </div>
     {/if}
 
-    {#if isResultsAvailable}
+    {#if isResultsAvailable || adminEarlyAccess}
     <h1>Sınav Sonuçları Sorgulama</h1>
 
     {#if isLoading}
@@ -400,6 +624,11 @@
              <div class="exam-info">
                  <h2>Sonuç Detayları</h2>
 
+                 <button class="download-btn" on:click={downloadResultDocument}>
+                     <span class="download-icon">⬇</span>
+                     SINAV SONUÇ BELGESİNİ İNDİR
+                 </button>
+
                  <!-- Student Info -->
                  <div class="student-info info-section">
                      <h3>Öğrenci Bilgisi</h3>
@@ -433,25 +662,25 @@
                          <span class="label">{OVERALL_INFO[3].name}:</span>
                          <span
                              class="value"
-                             class:status-success={formatValue(searchedResult[OVERALL_INFO[3].index]).includes('ASİL KAYIT HAKKI KAZANDINIZ')}
-                             class:status-warning={formatValue(searchedResult[OVERALL_INFO[3].index]).includes('YEDEK KAYIT HAKKI KAZANDINIZ')}
-                             class:status-danger={formatValue(searchedResult[OVERALL_INFO[3].index]).includes('KAZANAMADINIZ')}
-                             class:status-pending={formatValue(searchedResult[OVERALL_INFO[3].index]).includes('BEKLİYOR')}
+                             class:status-success={formatValue(searchedResult[OVERALL_INFO[3].index]).includes('Asil Kayıt Hakkı Kazandınız')}
+                             class:status-warning={formatValue(searchedResult[OVERALL_INFO[3].index]).includes('Yedek Kayıt Hakkı Kazandınız')}
+                             class:status-danger={formatValue(searchedResult[OVERALL_INFO[3].index]).includes('Kazanamadınız')}
+                             class:status-pending={formatValue(searchedResult[OVERALL_INFO[3].index]).includes('Bekliyor')}
                          >
                              {formatValue(searchedResult[OVERALL_INFO[3].index])}
                          </span>
                      </div>
 
                      <!-- Registration Info Section -->
-                     {#if status.includes('ASİL KAYIT HAKKI KAZANDINIZ')}
+                     {#if status.includes('Asil Kayıt Hakkı Kazandınız')}
                          <div class="registration-info asil-info">
                              <h3>Kayıt Bilgileri</h3>
-                             <p>Asil Kayıt Hakkı kazandınız. Kayıt işlemleri için <strong>30 Nisan</strong> tarihine kadar okul müdürlüğüne başvurmanız gerekmektedir.</p>
+                             <p>{asilRegistrationText}</p>
                          </div>
-                     {:else if status.includes('YEDEK KAYIT HAKKI KAZANDINIZ')}
+                     {:else if status.includes('Yedek Kayıt Hakkı Kazandınız')}
                          <div class="registration-info yedek-info">
                              <h3>Kayıt Bilgileri</h3>
-                             <p>Yedek Kayıt Hakkı kazandınız. Yedek kayıtlar <strong>2 Mayıs</strong> tarihinden itibaren kontenjan dahilinde sırası ile davet edilecektir. Okul duyurularını takip ediniz.</p>
+                             <p>{yedekRegistrationText}</p>
                          </div>
                      {/if}
                      <!-- End Registration Info Section -->
@@ -488,7 +717,7 @@
              </div>
         {/if}
     {/if}
-    {:else}
+    {:else if !adminEarlyAccess}
     <div class="not-available-container">
         {#if isLoadingSettings}
             <h2>Sistem Bilgileri Yükleniyor...</h2>
@@ -998,29 +1227,31 @@
 
     /* Status Variations */
     .status-card .value.status-success {
-        color: #2f855a; /* Green for success */
+        color: #2f855a;
         font-weight: 700;
         text-transform: uppercase;
         letter-spacing: 0.5px;
-        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+        flex-wrap: wrap;
         padding: 0.5rem 0;
     }
 
     .status-card .value.status-success::before {
         content: '✓';
-        position: absolute;
-        left: -1.5rem;
-        top: 50%;
-        transform: translateY(-50%);
+        flex-shrink: 0;
         background: #48bb78;
         color: white;
-        width: 1.2rem;
-        height: 1.2rem;
+        width: 1.3rem;
+        height: 1.3rem;
         border-radius: 50%;
-        display: flex;
+        display: inline-flex;
         align-items: center;
         justify-content: center;
-        font-size: 0.8rem;
+        font-size: 0.75rem;
+        line-height: 1;
     }
 
     .status-card .value.status-warning {
@@ -1341,6 +1572,57 @@
         }
     }
 
+    /* Admin early access */
+    .admin-early-access {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.5rem;
+        margin-top: 1.5rem;
+    }
+
+    .admin-early-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.6rem 1.4rem;
+        background: linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        font-size: 0.9rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        box-shadow: 0 3px 8px rgba(124, 58, 237, 0.3);
+        letter-spacing: 0.3px;
+    }
+
+    .admin-early-btn:hover {
+        background: linear-gradient(135deg, #6d28d9 0%, #4c1d95 100%);
+        transform: translateY(-2px);
+        box-shadow: 0 5px 12px rgba(124, 58, 237, 0.4);
+    }
+
+    .admin-early-btn:active {
+        transform: translateY(0);
+    }
+
+    .admin-btn-icon {
+        font-size: 1rem;
+    }
+
+    .admin-badge {
+        font-size: 0.75rem;
+        color: #6d28d9;
+        background: #ede9fe;
+        border: 1px dashed #a78bfa;
+        border-radius: 4px;
+        padding: 0.25rem 0.6rem;
+        font-weight: 500;
+        letter-spacing: 0.2px;
+    }
+
     /* Registration Info Styles */
     .registration-info {
         padding: 1.8rem 2rem;
@@ -1377,11 +1659,6 @@
         margin-right: auto;
     }
 
-    .registration-info strong {
-        font-weight: 700;
-        color: #1d4ed8; /* Stronger blue */
-    }
-
     /* Optional: Add icons */
     .registration-info.asil-info::before {
         /* content: '📅'; */ /* Using text instead for simplicity */
@@ -1410,5 +1687,40 @@
         .registration-info p {
             font-size: 0.9rem;
         }
+    }
+
+    .download-btn {
+        background: linear-gradient(135deg, #0d9488, #115e59);
+        color: white;
+        padding: 1rem 1.5rem;
+        border: none;
+        border-radius: 10px;
+        font-size: 1.05rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        margin-bottom: 1.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.625rem;
+        width: 100%;
+        box-shadow: 0 4px 14px rgba(13, 148, 136, 0.35);
+    }
+
+    .download-btn:hover {
+        background: linear-gradient(135deg, #0f766e, #134e4a);
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(13, 148, 136, 0.45);
+    }
+
+    .download-btn:active {
+        transform: translateY(0);
+    }
+
+    .download-icon {
+        font-size: 1.2rem;
     }
 </style> 

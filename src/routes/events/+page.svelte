@@ -7,7 +7,7 @@
     interface EventField {
         key: string;
         label: string;
-        type: 'text' | 'email' | 'phone' | 'number' | 'select';
+        type: 'text' | 'email' | 'phone' | 'number' | 'float' | 'select';
         required: boolean;
         options?: string[];
     }
@@ -52,6 +52,26 @@
     function handleNameInput(ev: Event, key: string) {
         const input = (ev.target as HTMLInputElement);
         formData[key] = toTurkishUpperCase(input.value);
+    }
+
+    function handleFloatInput(ev: Event, key: string) {
+        const input = ev.target as HTMLInputElement;
+        // Normalise: treat . as , (Turkish decimal separator)
+        let raw = input.value.replace('.', ',');
+        // Keep only digits, commas and a leading minus
+        raw = raw.replace(/[^0-9,\-]/g, '');
+        // Allow only one comma
+        const parts = raw.split(',');
+        if (parts.length > 2) raw = parts[0] + ',' + parts.slice(1).join('');
+        formData[key] = raw;
+        input.value = raw;
+    }
+
+    function handleIntInput(ev: Event, key: string) {
+        const input = ev.target as HTMLInputElement;
+        const raw = input.value.replace(/[^0-9\-]/g, '');
+        formData[key] = raw;
+        input.value = raw;
     }
 
     function handlePhoneInput(ev: Event, key: string) {
@@ -134,6 +154,11 @@
                     submitState = 'idle';
                     return;
                 }
+                if (field.type === 'float' && formData[field.key]?.trim() && isNaN(Number(formData[field.key].replace(',', '.')))) {
+                    showNotification(`${field.label} alanına geçerli bir ondalık sayı giriniz.`, 'error');
+                    submitState = 'idle';
+                    return;
+                }
             }
 
             const appData: Record<string, unknown> = {
@@ -150,6 +175,9 @@
             submitState = 'success';
             formData = {};
         } catch (err) {
+            console.error('[handleSubmit] Başvuru gönderilemedi:', err);
+            console.error('[handleSubmit] formData:', JSON.stringify(formData, null, 2));
+            console.error('[handleSubmit] eventId:', selectedEvent?.id, '| eventName:', selectedEvent?.name);
             showNotification('Başvuru gönderilirken bir hata oluştu. Lütfen tekrar deneyiniz.', 'error');
             submitState = 'error';
             setTimeout(() => { submitState = 'idle'; }, 3000);
@@ -217,9 +245,21 @@
                                     />
                                 {:else if field.type === 'number'}
                                     <input
-                                        type="number"
+                                        type="text"
+                                        inputmode="numeric"
                                         id={field.key}
-                                        bind:value={formData[field.key]}
+                                        value={formData[field.key] ?? ''}
+                                        on:input={(ev) => handleIntInput(ev, field.key)}
+                                        placeholder={field.label}
+                                        required={field.required}
+                                    />
+                                {:else if field.type === 'float'}
+                                    <input
+                                        type="text"
+                                        inputmode="decimal"
+                                        id={field.key}
+                                        value={formData[field.key] ?? ''}
+                                        on:input={(ev) => handleFloatInput(ev, field.key)}
                                         placeholder={field.label}
                                         required={field.required}
                                     />

@@ -568,7 +568,10 @@
             const schools = schoolsSnapshot.docs;
 
             if (schools.length === 0) {
+                await deleteDoc(docRef);
                 showNotification('Sınav yeri ataması yapılamadı. Lütfen daha sonra tekrar deneyiniz.', 'error');
+                submitState = 'error';
+                setTimeout(() => { submitState = 'idle'; }, 3000);
                 return;
             }
 
@@ -723,6 +726,14 @@
                 phoneNumber: '',
             };
         } catch (error) {
+            // Clean up the partially-created application document so the student can retry
+            try {
+                const docRef = doc(db, "examApplications", formData.tcId);
+                const snap = await getDoc(docRef);
+                if (snap.exists() && !snap.data().schoolId) {
+                    await deleteDoc(docRef);
+                }
+            } catch {}
             showNotification('Başvuru gönderilirken bir hata oluştu. Lütfen tekrar deneyiniz.', 'error');
             submitState = 'error';
             setTimeout(() => { submitState = 'idle'; }, 3000);

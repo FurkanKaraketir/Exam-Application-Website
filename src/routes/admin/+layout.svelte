@@ -143,6 +143,16 @@
                         <span class="nav-label">Sınav Notları</span>
                     </a>
                     <a 
+                        href="/admin/registration-info" 
+                        class="nav-item" 
+                        class:active={$page.url.pathname === '/admin/registration-info'}
+                        aria-label="Kayıt bilgileri sayfasına git"
+                        aria-current={$page.url.pathname === '/admin/registration-info' ? 'page' : undefined}
+                    >
+                        <span class="nav-icon" aria-hidden="true">📋</span>
+                        <span class="nav-label">Kayıt Bilgileri</span>
+                    </a>
+                    <a 
                         href="/admin/events" 
                         class="nav-item" 
                         class:active={$page.url.pathname === '/admin/events'}

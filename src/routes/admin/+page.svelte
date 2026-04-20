@@ -371,10 +371,9 @@
                 console.log(warningMessage);
             }
 
-            // Now get the ordered documents for display
-            const q = query(collection(db, "examApplications"), orderBy("assignedAt", "desc"));
-            const querySnapshot = await getDocs(q);
-            applications = querySnapshot.docs.map((doc: QueryDocumentSnapshot) => ({
+            // Build applications from the already-fetched snapshot so documents without
+            // assignedAt (stuck/unassigned) are never silently excluded by an orderBy query.
+            applications = allDocsSnapshot.docs.map((doc: QueryDocumentSnapshot) => ({
                 tcId: doc.id,
                 studentFullName: doc.data().studentFullName || '',
                 schoolName: doc.data().schoolName || '',
@@ -387,6 +386,14 @@
                 hallId: doc.data().hallId || '',
                 orderNumber: doc.data().orderNumber || null
             } as ExamApplication));
+
+            // Sort descending by assignedAt; unassigned docs (null) go to the top so they are visible
+            applications.sort((a, b) => {
+                if (!a.assignedAt && !b.assignedAt) return 0;
+                if (!a.assignedAt) return -1;
+                if (!b.assignedAt) return 1;
+                return b.assignedAt.getTime() - a.assignedAt.getTime();
+            });
 
             filterApplications();
             await loadCapacityStats();
@@ -833,6 +840,87 @@
         return arr;
     }
 
+    let isAutoAssigning = false;
+
+    async function autoAssignUnassigned() {
+        const unassigned = applications.filter(app => applicationsWithMissingFields.has(app.tcId));
+        if (unassigned.length === 0) {
+            showNotification('Atanmamış başvuru bulunamadı.', 'warning');
+            return;
+        }
+
+        if (!confirm(`${unassigned.length} atanmamış başvuruya otomatik salon ataması yapılacak. Devam edilsin mi?`)) return;
+
+        isAutoAssigning = true;
+        let successCount = 0;
+        let failCount = 0;
+
+        for (const app of unassigned) {
+            try {
+                const assignment = await findSchoolAndHallForApplication();
+                if (!assignment) {
+                    failCount++;
+                    showNotification(`${app.studentFullName} için uygun salon bulunamadı.`, 'error');
+                    continue;
+                }
+
+                const studentsSnapshot = await getDocs(
+                    collection(db, "schools", assignment.schoolId, "examHalls", assignment.hallId, "students")
+                );
+                const orderNumber = studentsSnapshot.size + 1;
+
+                await setDoc(
+                    doc(db, "schools", assignment.schoolId, "examHalls", assignment.hallId, "students", app.tcId),
+                    {
+                        tcId: app.tcId,
+                        studentFullName: app.studentFullName,
+                        schoolId: assignment.schoolId,
+                        schoolName: assignment.schoolName,
+                        studentSchoolName: app.studentSchoolName || app.schoolName,
+                        parentFullName: app.parentFullName,
+                        phoneNumber: app.phoneNumber,
+                        hallName: assignment.hallName,
+                        hallId: assignment.hallId,
+                        assignedAt: new Date(),
+                        orderNumber
+                    }
+                );
+
+                await updateDoc(doc(db, "examApplications", app.tcId), {
+                    schoolId: assignment.schoolId,
+                    schoolName: assignment.schoolName,
+                    hallId: assignment.hallId,
+                    hallName: assignment.hallName,
+                    assignedAt: new Date(),
+                    orderNumber
+                });
+
+                // Update local state
+                applications = applications.map(a =>
+                    a.tcId === app.tcId
+                        ? { ...a, schoolId: assignment.schoolId, schoolName: assignment.schoolName,
+                              hallId: assignment.hallId, hallName: assignment.hallName,
+                              assignedAt: new Date(), orderNumber }
+                        : a
+                );
+                applicationsWithMissingFields = new Set(
+                    [...applicationsWithMissingFields].filter(id => id !== app.tcId)
+                );
+                successCount++;
+            } catch (err) {
+                console.error(`autoAssign error for ${app.tcId}:`, err);
+                failCount++;
+            }
+        }
+
+        isAutoAssigning = false;
+        filterApplications();
+        await loadCapacityStats();
+
+        if (successCount > 0) showNotification(`${successCount} başvuruya salon ataması yapıldı.`, 'success');
+        if (failCount > 0) showNotification(`${failCount} başvuruya atama yapılamadı.`, 'error');
+    }
+
     /** Find school and hall using the normal algorithm (weight-based, capacity check) */
     async function findSchoolAndHallForApplication(): Promise<{ schoolId: string; schoolName: string; hallId: string; hallName: string } | null> {
         const schoolsSnapshot = await getDocs(collection(db, "schools"));
@@ -1132,6 +1220,18 @@
                     <input type="checkbox" bind:checked={showOnlyIncomplete} on:change={filterApplications} />
                     Eksik alanlı başvuruları göster ({applicationsWithMissingFields.size})
                 </label>
+                <button
+                    class="auto-assign-btn"
+                    on:click={autoAssignUnassigned}
+                    disabled={isAutoAssigning}
+                    title="Salon/okul ataması eksik olan başvurulara otomatik atama yap"
+                >
+                    {#if isAutoAssigning}
+                        ⏳ Atanıyor...
+                    {:else}
+                        ⚡ Otomatik Ata ({applicationsWithMissingFields.size})
+                    {/if}
+                </button>
             {/if}
         </div>
         
@@ -1916,6 +2016,21 @@
         cursor: pointer;
         white-space: nowrap;
     }
+
+    .auto-assign-btn {
+        padding: 0.4rem 0.9rem;
+        background: linear-gradient(135deg, #d97706, #b45309);
+        color: white;
+        border: none;
+        border-radius: 6px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: opacity 0.2s;
+    }
+    .auto-assign-btn:hover:not(:disabled) { opacity: 0.88; }
+    .auto-assign-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
     .incomplete-row {
         background: #fffbeb;
